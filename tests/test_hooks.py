@@ -174,6 +174,16 @@ class OpenSpecTests(unittest.TestCase):
             self.assertIn("system of record", rendered)
             self.assertIn("reference the OpenSpec spec", rendered)
 
+    def test_context_warns_when_cli_missing(self):
+        missing = openspec.render_context(
+            Path("/project"), ["openspec-propose"], cli_available=False
+        )
+        present = openspec.render_context(
+            Path("/project"), ["openspec-propose"], cli_available=True
+        )
+        self.assertIn("openspec CLI was not found", missing)
+        self.assertNotIn("openspec CLI was not found", present)
+
 
 class SuperpowersTests(unittest.TestCase):
     def test_uses_exact_active_marketplace_version_not_path_sorting(self):
