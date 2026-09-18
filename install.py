@@ -45,6 +45,7 @@ def run_command(
     args: list[str],
     *,
     env: dict[str, str] | None = None,
+    cwd: Path | None = None,
     timeout: int = 180,
 ) -> subprocess.CompletedProcess[str]:
     print(f"+ {shlex.join(args)}")
@@ -55,6 +56,7 @@ def run_command(
             capture_output=True,
             text=True,
             env=env,
+            cwd=cwd,
             timeout=timeout,
         )
     except FileNotFoundError as error:
@@ -245,6 +247,26 @@ def update_openspec(manager: str = "auto") -> str:
         )
     print(f"OpenSpec {version} is installed ({manager}, latest registry release).")
     return version
+
+
+def init_openspec_project(path: Path) -> None:
+    """Initialize (or refresh) OpenSpec for Codex inside a single project.
+
+    Deliberately explicit per project: `openspec init` writes files into the
+    working tree, so it must never run implicitly at session time.
+    """
+    openspec = require_command("openspec")
+    target = path.expanduser().resolve()
+    if not target.is_dir():
+        raise InstallError(f"--openspec-init target is not a directory: {target}")
+    if (target / "openspec" / "config.yaml").is_file():
+        run_command([openspec, "update", "--force"], cwd=target, timeout=120)
+        print(f"Refreshed OpenSpec integration in {target}")
+        return
+    run_command([openspec, "init", "--tools", "codex"], cwd=target, timeout=120)
+    if not (target / "openspec" / "config.yaml").is_file():
+        raise InstallError(f"openspec init did not create {target}/openspec/config.yaml")
+    print(f"Initialized OpenSpec for Codex in {target}")
 
 
 def _command_tokens(command: object) -> list[str]:
@@ -438,6 +460,16 @@ def main() -> int:
         default=None,
         help="override CODEX_HOME (primarily for testing)",
     )
+    parser.add_argument(
+        "--openspec-init",
+        nargs="?",
+        const=Path("."),
+        type=Path,
+        default=None,
+        metavar="PROJECT_DIR",
+        help="initialize OpenSpec for Codex in PROJECT_DIR (default: current directory); "
+        "refreshes the integration when the project is already initialized",
+    )
     args = parser.parse_args()
 
     overlap = args.hooks & args.remove
@@ -466,6 +498,8 @@ def main() -> int:
             print(f"Updated hooks: {path}")
             if backup:
                 print(f"Backup: {backup}")
+        if args.openspec_init is not None:
+            init_openspec_project(args.openspec_init)
         print("Open a new Codex session, run /hooks, and trust each changed hook definition.")
     except InstallError as error:
         print(f"error: {error}", file=sys.stderr)
