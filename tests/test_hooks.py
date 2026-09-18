@@ -169,6 +169,49 @@ class GuidedInstallTests(unittest.TestCase):
         ):
             self.assertIsNone(installer.latest_release_tag())
 
+    def test_menu_navigation_toggle_all_and_confirm(self):
+        menu = installer._Menu(3, {0, 1, 2})
+        menu.press("down")
+        self.assertEqual(menu.cursor, 1)
+        menu.press("up")
+        menu.press("up")  # wraps to the last option
+        self.assertEqual(menu.cursor, 2)
+        menu.press("j")  # vim-style down also wraps
+        self.assertEqual(menu.cursor, 0)
+        menu.press("space")
+        self.assertEqual(menu.chosen, {1, 2})
+        menu.press("a")  # toggles all back on
+        self.assertEqual(menu.chosen, {0, 1, 2})
+        menu.press("a")  # and all off
+        self.assertEqual(menu.chosen, set())
+        self.assertFalse(menu.done)
+        menu.press("enter")
+        self.assertTrue(menu.done)
+
+    def test_confirm_falls_back_to_line_mode_without_key_support(self):
+        import io
+
+        class FakeTty(io.StringIO):
+            def write(self, data):
+                return len(data)
+
+        tty = FakeTty("n\n\n")  # no fileno() -> _supports_keys is False
+        self.assertFalse(installer.confirm(tty, "q1", True))
+        self.assertTrue(installer.confirm(tty, "q2", True))
+
+    def test_multiselect_line_fallback_asks_per_option(self):
+        import io
+
+        class FakeTty(io.StringIO):
+            def write(self, data):
+                return len(data)
+
+        options = [("a", "alpha", ""), ("b", "beta", ""), ("c", "gamma", "")]
+        tty = FakeTty("y\nn\ny\n")
+        self.assertEqual(
+            installer.multiselect(tty, "pick", options, range(3)), {"a", "c"}
+        )
+
 
 class InitOpenSpecTests(unittest.TestCase):
     def test_fresh_project_runs_init(self):

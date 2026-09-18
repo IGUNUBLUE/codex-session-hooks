@@ -90,9 +90,11 @@ By default, the installer:
 
 ### Guided mode
 
-When a terminal is available, the installer runs interactively: it shows each step, animates progress during long operations, and asks `[Y/n]` questions for the decisions above (which hooks, whether to update frameworks, whether to initialize OpenSpec in the current project). Prompts read `/dev/tty`, so they still work when the script is piped through `curl | bash`.
+When a terminal is available, the installer runs an interactive TUI: a plan panel explains what it will do before anything runs, steps animate with a spinner during long operations, and every decision is a prompt — an arrow-key multiselect for the hooks (`↑/↓` move, `space` toggles, `a` toggles all, `enter` confirms) and single-keypress `y`/`n` confirms for the rest (whether to update frameworks, whether to initialize OpenSpec in the current project). Ctrl+C aborts cleanly.
 
-- `-y` / `--yes` accepts every default without asking — the previous non-interactive behavior, suitable for scripts.
+Prompts read `/dev/tty`, so they still work when the script is piped through `curl | bash`; environments without a controlling terminal fall back to plain line input. Colors honor `NO_COLOR` and `TERM=dumb`.
+
+- `-y` / `--yes` accepts every default without asking — the non-interactive behavior, suitable for scripts.
 - `--skip-update-check` skips the release check entirely.
 
 ### Installer updates
