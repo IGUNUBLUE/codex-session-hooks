@@ -15,9 +15,15 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
+import threading
+import urllib.request
 
 PROJECT = "codex-session-hooks"
+VERSION = "1.4.0"  # released version; bump before tagging
+REPO = "IGUNUBLUE/codex-session-hooks"
+PREFS_FILE = "codex-session-hooks.json"
 MARKER = f"--managed-by={PROJECT}"
 HOOK_DEFINITIONS = {
     "superpowers": {
@@ -83,6 +89,158 @@ def require_command(name: str) -> str:
     if not path:
         raise InstallError(f"required command not found: {name}")
     return path
+
+
+class _StdTty:
+    """Adapter exposing tty-style read/write over stdin+stderr."""
+
+    def write(self, data: str) -> int:
+        return sys.stderr.write(data)
+
+    def flush(self) -> None:
+        sys.stderr.flush()
+
+    def readline(self) -> str:
+        return sys.stdin.readline()
+
+
+def open_tty():
+    """Return a read/write handle to the controlling terminal, if any.
+
+    Prompts prefer /dev/tty so they still work when the script itself is piped
+    (`curl ... | bash`), where stdin is the script rather than the keyboard.
+    Fall back to stdin when it is itself a terminal (e.g. Windows, containers).
+    """
+    try:
+        return os.fdopen(os.open("/dev/tty", os.O_RDWR), "r+")
+    except OSError:
+        if sys.stdin.isatty():
+            return _StdTty()
+        return None
+
+
+def ask(tty, question: str, default: bool = True) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        tty.write(f"? {question} {suffix} ")
+        tty.flush()
+        answer = tty.readline().strip().lower()
+        if not answer:
+            return default
+        if answer in ("y", "yes"):
+            return True
+        if answer in ("n", "no"):
+            return False
+        tty.write("Please answer y or n.\n")
+
+
+class Spinner:
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, label: str, tty):
+        self.label = label
+        self.tty = tty
+        self._done = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self):
+        if self.tty is None:
+            print(self.label)
+        else:
+            self._thread = threading.Thread(target=self._spin, daemon=True)
+            self._thread.start()
+        return self
+
+    def _spin(self) -> None:
+        i = 0
+        while not self._done.is_set():
+            self.tty.write(f"\r{self.FRAMES[i % len(self.FRAMES)]} {self.label}")
+            self.tty.flush()
+            i += 1
+            self._done.wait(0.08)
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self._done.set()
+        if self._thread is not None:
+            self._thread.join()
+        if self.tty is not None:
+            mark = "x" if exc_type else "ok"
+            self.tty.write(f"\r[{mark}] {self.label}\n")
+            self.tty.flush()
+        return False
+
+
+def _flag_passed(name: str) -> bool:
+    return any(arg == name or arg.startswith(f"{name}=") for arg in sys.argv[1:])
+
+
+def latest_release_tag(timeout: int = 8) -> str | None:
+    url = f"https://api.github.com/repos/{REPO}/releases/latest"
+    request = urllib.request.Request(url, headers={"User-Agent": PROJECT})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = json.loads(response.read().decode())
+    except (OSError, ValueError):
+        return None
+    tag = data.get("tag_name")
+    return tag if isinstance(tag, str) else None
+
+
+def _version_of(tag: str) -> tuple[int, int, int] | None:
+    try:
+        return parse_version(tag.lstrip("v"))
+    except InstallError:
+        return None
+
+
+def is_newer(tag: str, current: str) -> bool:
+    remote, local = _version_of(tag), _version_of(current)
+    return remote is not None and local is not None and remote > local
+
+
+def load_prefs(codex_home: Path) -> dict:
+    try:
+        data = json.loads((codex_home / PREFS_FILE).read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_prefs(codex_home: Path, prefs: dict) -> None:
+    codex_home.mkdir(parents=True, exist_ok=True)
+    (codex_home / PREFS_FILE).write_text(json.dumps(prefs, indent=2) + "\n")
+
+
+def self_update(script_dir: Path, tag: str) -> None:
+    """Update the running installation to a release tag."""
+    if (script_dir / ".git").exists():
+        git = require_command("git")
+        run_command([git, "-C", str(script_dir), "pull", "--ff-only"], timeout=120)
+        return
+    url = f"https://github.com/{REPO}/archive/{tag}.tar.gz"
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = Path(tmp) / "repo.tar.gz"
+        try:
+            urllib.request.urlretrieve(url, archive)
+        except OSError as error:
+            raise InstallError(f"could not download {url}: {error}") from error
+        extract = Path(tmp) / "extract"
+        extract.mkdir()
+        with tarfile.open(archive) as tar:
+            try:
+                tar.extractall(extract, filter="data")
+            except TypeError:
+                tar.extractall(extract)
+        roots = list(extract.iterdir())
+        if len(roots) != 1 or not roots[0].is_dir():
+            raise InstallError("downloaded archive had an unexpected layout")
+        for entry in list(script_dir.iterdir()):
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+        for entry in roots[0].iterdir():
+            shutil.move(str(entry), script_dir / entry.name)
 
 
 def _plugin_listing(codex: str, include_available: bool = False) -> dict[str, object]:
@@ -435,14 +593,26 @@ def main() -> int:
     parser.add_argument(
         "--hooks",
         type=parse_hook_ids,
-        default=set(HOOK_DEFINITIONS),
-        help="hooks to install: superpowers, openspec, all, or none (default: all)",
+        default=None,
+        help="hooks to install: superpowers, openspec, all, or none (default: all; "
+        "prompted interactively when a terminal is available)",
     )
     parser.add_argument(
         "--remove",
         type=parse_hook_ids,
         default=set(),
         help="managed hooks to remove without affecting unrelated hooks",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="non-interactive: accept defaults for every prompt",
+    )
+    parser.add_argument(
+        "--skip-update-check",
+        action="store_true",
+        help="do not check GitHub for a newer installer release",
     )
     parser.add_argument(
         "--skip-framework-updates",
@@ -472,25 +642,75 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    overlap = args.hooks & args.remove
-    if overlap:
-        parser.error(f"cannot install and remove the same hook: {', '.join(sorted(overlap))}")
-
     home = Path(os.environ.get("HOME", str(Path.home())))
     codex_home = (args.codex_home or Path(os.environ.get("CODEX_HOME", home / ".codex"))).expanduser()
     script_dir = Path(__file__).resolve().parent
+    tty = None if args.yes else open_tty()
+
+    print(f"{PROJECT} {VERSION}")
 
     try:
-        if not args.skip_framework_updates:
-            if "superpowers" in args.hooks:
-                update_superpowers()
-            if "openspec" in args.hooks:
-                update_openspec(args.openspec_package_manager)
+        prefs = load_prefs(codex_home)
+        if tty is not None and "auto_update" not in prefs:
+            prefs["auto_update"] = ask(
+                tty, "Check for installer updates automatically on future runs?", True
+            )
+            save_prefs(codex_home, prefs)
 
-        enable_codex_hooks(codex_home)
-        path = codex_home / "hooks.json"
-        current = load_hooks(path)
-        updated = merge_hooks(current, script_dir, args.hooks, args.remove)
+        if not args.skip_update_check:
+            latest = latest_release_tag()
+            if latest and is_newer(latest, VERSION):
+                if prefs.get("auto_update") or (
+                    tty is not None
+                    and ask(tty, f"Update the installer {VERSION} -> {latest}?", True)
+                ):
+                    with Spinner(f"Updating installer to {latest}", tty):
+                        self_update(script_dir, latest)
+                    os.execv(
+                        sys.executable,
+                        [sys.executable, str(script_dir / "install.py"), *sys.argv[1:]],
+                    )
+                else:
+                    print(f"note: {latest} is available (running {VERSION})")
+
+        hooks = args.hooks
+        if hooks is None:
+            if tty is not None and not _flag_passed("--remove"):
+                hooks = {
+                    hook_id
+                    for hook_id in HOOK_DEFINITIONS
+                    if ask(tty, f"Install the '{hook_id}' SessionStart hook?", True)
+                }
+            elif _flag_passed("--remove"):
+                hooks = set()
+            else:
+                hooks = set(HOOK_DEFINITIONS)
+
+        overlap = hooks & args.remove
+        if overlap:
+            parser.error(
+                f"cannot install and remove the same hook: {', '.join(sorted(overlap))}"
+            )
+
+        skip_updates = args.skip_framework_updates
+        if not skip_updates and tty is not None:
+            skip_updates = not ask(
+                tty, "Install/update the frameworks to their latest releases?", True
+            )
+
+        if not skip_updates:
+            if "superpowers" in hooks:
+                with Spinner("Ensuring the latest Superpowers plugin", tty):
+                    update_superpowers()
+            if "openspec" in hooks:
+                with Spinner("Ensuring the latest OpenSpec CLI", tty):
+                    update_openspec(args.openspec_package_manager)
+
+        with Spinner("Enabling Codex hooks and merging hook definitions", tty):
+            enable_codex_hooks(codex_home)
+            path = codex_home / "hooks.json"
+            current = load_hooks(path)
+            updated = merge_hooks(current, script_dir, hooks, args.remove)
         if current == updated:
             print(f"Hooks already current: {path}")
         else:
@@ -498,8 +718,22 @@ def main() -> int:
             print(f"Updated hooks: {path}")
             if backup:
                 print(f"Backup: {backup}")
-        if args.openspec_init is not None:
-            init_openspec_project(args.openspec_init)
+
+        init_target = args.openspec_init
+        if (
+            init_target is None
+            and tty is not None
+            and "openspec" in hooks
+            and not _flag_passed("--openspec-init")
+        ):
+            cwd = Path.cwd()
+            if cwd != home and not (cwd / "openspec" / "config.yaml").is_file():
+                if ask(tty, f"Initialize OpenSpec for Codex in {cwd}?", False):
+                    init_target = cwd
+        if init_target is not None:
+            with Spinner(f"Initializing OpenSpec in {init_target}", tty):
+                init_openspec_project(init_target)
+
         print("Open a new Codex session, run /hooks, and trust each changed hook definition.")
     except InstallError as error:
         print(f"error: {error}", file=sys.stderr)

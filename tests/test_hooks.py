@@ -121,6 +121,55 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), data)
 
 
+class GuidedInstallTests(unittest.TestCase):
+    def test_ask_parses_yes_no_default_and_retry(self):
+        import io
+
+        class FakeTty(io.StringIO):
+            def write(self, data):  # prompt output goes to the screen, not the input stream
+                return len(data)
+
+        tty = FakeTty("y\nn\n\nmaybe\ny\n")
+        self.assertTrue(installer.ask(tty, "q1", True))
+        self.assertFalse(installer.ask(tty, "q2", True))
+        self.assertFalse(installer.ask(tty, "q3", False))
+        self.assertTrue(installer.ask(tty, "q4", False))
+
+    def test_is_newer_compares_semver_tags(self):
+        self.assertTrue(installer.is_newer("v1.4.0", "1.3.0"))
+        self.assertFalse(installer.is_newer("v1.3.0", "1.3.0"))
+        self.assertFalse(installer.is_newer("v1.2.9", "1.3.0"))
+        self.assertFalse(installer.is_newer("garbage", "1.3.0"))
+
+    def test_prefs_roundtrip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            installer.save_prefs(home, {"auto_update": True})
+            self.assertEqual(installer.load_prefs(home), {"auto_update": True})
+            self.assertEqual(installer.load_prefs(home / "missing"), {})
+
+    def test_latest_release_tag_parses_response(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"tag_name": "v9.9.9"}'
+
+        with mock.patch.object(
+            installer.urllib.request, "urlopen", return_value=FakeResponse()
+        ):
+            self.assertEqual(installer.latest_release_tag(), "v9.9.9")
+
+        with mock.patch.object(
+            installer.urllib.request, "urlopen", side_effect=OSError("offline")
+        ):
+            self.assertIsNone(installer.latest_release_tag())
+
+
 class InitOpenSpecTests(unittest.TestCase):
     def test_fresh_project_runs_init(self):
         with tempfile.TemporaryDirectory() as directory:
