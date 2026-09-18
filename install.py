@@ -23,7 +23,7 @@ import threading
 import urllib.request
 
 PROJECT = "codex-session-hooks"
-VERSION = "1.5.0"  # released version; bump before tagging
+VERSION = "1.5.1"  # released version; bump before tagging
 REPO = "IGUNUBLUE/codex-session-hooks"
 PREFS_FILE = "codex-session-hooks.json"
 MARKER = f"--managed-by={PROJECT}"
