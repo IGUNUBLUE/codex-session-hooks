@@ -5,7 +5,7 @@ Small, auditable `SessionStart` hooks for [Codex CLI](https://github.com/openai/
 | Hook | Behavior |
 |---|---|
 | `superpowers-bootstrap.py` | Loads `using-superpowers/SKILL.md` only from the installed, enabled Superpowers plugin version reported by Codex. |
-| `openspec-context.py` | Finds the nearest ancestor containing `openspec/config.yaml` and advertises only the OpenSpec skills that actually exist. It does not expose repository-controlled change names or impose OpenSpec on unrelated work. |
+| `openspec-context.py` | Finds the nearest ancestor containing `openspec/config.yaml` and advertises only the OpenSpec skills that actually exist. Warns when the `openspec` CLI is not on PATH, and declares the framework precedence rule below. It does not expose repository-controlled change names or impose OpenSpec on unrelated work. |
 
 The legacy shell entry points remain as thin compatibility wrappers, but new installations invoke the Python hooks directly.
 
@@ -29,6 +29,8 @@ Two upstream design choices make this composition safe:
 
 - Every generated OpenSpec skill carries an auto-selected escape hatch: if it was triggered without an explicit OpenSpec request, it instructs the agent to answer normally rather than imposing the spec workflow.
 - Superpowers' own bootstrap declares that user instructions (`AGENTS.md`, direct requests) take precedence over skills — so repository rules can still override this default ordering.
+
+The repository manages the whole stack, not just the text layer: the installer guarantees the Superpowers plugin (installed and enabled via the official marketplace) and the OpenSpec CLI (latest registry version through the owning package manager), and the hook verifies the CLI is on PATH at session time. Nothing in either upstream framework is modified — the composition is added purely through developer context, and the model interprets and combines both skill sets organically.
 
 ## Prerequisites
 

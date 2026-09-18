@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 
 SKILL_NAME = re.compile(r"^openspec-[a-z0-9][a-z0-9-]*$")
@@ -52,7 +53,9 @@ def find_skill_names(project_root: Path, codex_home: Path | None = None) -> list
     return sorted(names)
 
 
-def render_context(project_root: Path, skill_names: list[str]) -> str:
+def render_context(
+    project_root: Path, skill_names: list[str], cli_available: bool = True
+) -> str:
     root = json.dumps(str(project_root))
     config = json.dumps(str(project_root / "openspec" / "config.yaml"))
     lines = [
@@ -76,6 +79,12 @@ def render_context(project_root: Path, skill_names: list[str]) -> str:
         lines.append(
             "No generated Codex OpenSpec skills were found. Do not guess invocation names; "
             "the project needs `openspec update` or `openspec init --tools codex`."
+        )
+    if not cli_available:
+        lines.append(
+            "The openspec CLI was not found on PATH; the generated skills depend on it. "
+            "Install @fission-ai/openspec (requires Node.js >= 20.19.0) before relying on "
+            "this workflow."
         )
     lines.extend(
         [
@@ -102,7 +111,10 @@ def main() -> int:
     home = Path(os.environ.get("HOME", str(Path.home())))
     codex_home = Path(os.environ.get("CODEX_HOME", home / ".codex"))
     try:
-        sys.stdout.write(render_context(root, find_skill_names(root, codex_home)))
+        cli_available = shutil.which("openspec") is not None
+        sys.stdout.write(
+            render_context(root, find_skill_names(root, codex_home), cli_available)
+        )
     except OSError as error:
         print(f"codex-session-hooks: {error}", file=sys.stderr)
     return 0
