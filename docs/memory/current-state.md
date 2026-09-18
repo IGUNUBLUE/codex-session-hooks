@@ -4,7 +4,7 @@
 
 ## Release
 
-- Latest release: **v1.5.0** — clack-style guided TUI installer.
+- Latest release: **v1.5.2** — clack-style guided TUI installer.
 - Public repo: https://github.com/IGUNUBLUE/codex-session-hooks
 - Dev clone: `~/Projects/codex-session-hooks` (location-independent; movable).
 - Managed runtime copy: `~/.local/share/codex-session-hooks`
