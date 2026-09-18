@@ -88,6 +88,17 @@ By default, the installer:
 4. Atomically merges both handler definitions into `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`). Existing unrelated hooks are preserved exactly. Changed files receive a unique timestamped backup.
 5. Migrates only hook entries previously owned by this project; similarly named third-party hooks are never matched by basename alone.
 
+### Guided mode
+
+When a terminal is available, the installer runs interactively: it shows each step, animates progress during long operations, and asks `[Y/n]` questions for the decisions above (which hooks, whether to update frameworks, whether to initialize OpenSpec in the current project). Prompts read `/dev/tty`, so they still work when the script is piped through `curl | bash`.
+
+- `-y` / `--yes` accepts every default without asking — the previous non-interactive behavior, suitable for scripts.
+- `--skip-update-check` skips the release check entirely.
+
+### Installer updates
+
+Each run compares the embedded version against the latest GitHub release. When a newer one exists, the installer offers to update itself — `git pull --ff-only` for checkouts, re-downloading the release tarball for standalone installs — and re-executes so the new code continues the run. The first run asks whether to do this automatically on future runs; the answer is stored in `$CODEX_HOME/codex-session-hooks.json`.
+
 After installation, start a new Codex session, run `/hooks`, review the changed definitions, and trust them. Codex intentionally skips untrusted user hooks. Trust covers the command definition, not future changes to the target script, so review repository updates before pulling them.
 
 ### Select handlers
