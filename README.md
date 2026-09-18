@@ -34,9 +34,11 @@ The repository manages the whole stack, not just the text layer: the installer g
 
 ## Prerequisites
 
+The installer verifies these and fails with a clear error if they are missing — it does not install them:
+
 - A recent Codex CLI exposing `codex plugin` and lifecycle hooks.
 - Python 3.10 or newer.
-- For OpenSpec: Node.js 20.19.0 or newer and one supported global package manager (`volta`, `npm`, `pnpm`, `bun`, or Yarn 1).
+- For OpenSpec: Node.js 20.19.0 or newer and one supported global package manager (`npm`, `pnpm`, `bun`, Yarn 1, or `volta`).
 - `bash` is optional and used only by the Unix convenience wrappers. Native Windows users can run `python install.py`.
 
 ## Install
@@ -81,7 +83,7 @@ python install.py
 By default, the installer:
 
 1. Discovers Superpowers in the official Codex marketplace, runs the idempotent `codex plugin add <discovered-plugin-id>` command, and verifies that it is installed and enabled. The version is the latest release resolved by that marketplace at install time.
-2. Detects the package manager that owns OpenSpec (including Volta), installs `@fission-ai/openspec@latest`, queries the registry, and verifies that `openspec --version` matches it.
+2. Detects the package manager that owns an existing OpenSpec installation (including Volta) and updates it in place; for a fresh install it uses the first available of `npm`, `pnpm`, `bun`, Yarn 1, or `volta`. Installs `@fission-ai/openspec@latest`, queries the registry, and verifies that `openspec --version` matches it.
 3. Enables Codex hooks through `codex features enable hooks`.
 4. Atomically merges both handler definitions into `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`). Existing unrelated hooks are preserved exactly. Changed files receive a unique timestamped backup.
 5. Migrates only hook entries previously owned by this project; similarly named third-party hooks are never matched by basename alone.
@@ -107,7 +109,7 @@ After installation, start a new Codex session, run `/hooks`, review the changed 
 ./install.sh --hooks none --remove all --skip-framework-updates
 ```
 
-If OpenSpec is owned by a particular package manager, override detection:
+Auto-detection respects the manager that owns an existing installation. To force a specific one — for example `volta` on a machine that also has npm — override it:
 
 ```bash
 ./install.sh --openspec-package-manager pnpm
