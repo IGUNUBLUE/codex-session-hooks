@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import re
+import select
 import shlex
 import shutil
 import stat
@@ -21,7 +23,7 @@ import threading
 import urllib.request
 
 PROJECT = "codex-session-hooks"
-VERSION = "1.4.0"  # released version; bump before tagging
+VERSION = "1.5.0"  # released version; bump before tagging
 REPO = "IGUNUBLUE/codex-session-hooks"
 PREFS_FILE = "codex-session-hooks.json"
 MARKER = f"--managed-by={PROJECT}"
@@ -103,6 +105,9 @@ class _StdTty:
     def readline(self) -> str:
         return sys.stdin.readline()
 
+    def fileno(self) -> int:
+        return sys.stdin.fileno()
+
 
 def open_tty():
     """Return a read/write handle to the controlling terminal, if any.
@@ -132,6 +137,213 @@ def ask(tty, question: str, default: bool = True) -> bool:
         if answer in ("n", "no"):
             return False
         tty.write("Please answer y or n.\n")
+
+
+# --- guided terminal UI ---------------------------------------------------
+# Minimal clack-style widgets built on stdlib ANSI: intro/note/outro panels,
+# single-keypress confirms, and an arrow-key multiselect. Everything degrades
+# to plain line input when the terminal cannot report key presses.
+
+_BAR = "│"
+_S_ACTIVE = "◇"
+_S_DONE = "◆"
+_S_ON = "●"
+_S_OFF = "○"
+_S_CURSOR = "❯"
+
+_COLOR = False
+
+
+def _c(code: str, text: str) -> str:
+    return f"\x1b[{code}m{text}\x1b[0m" if _COLOR else text
+
+
+def _bar() -> str:
+    return _c("36", _BAR)
+
+
+def intro(tty, title: str) -> None:
+    tty.write(f"{_c('36', '┌')}  {_c('1', title)}\n{_bar()}\n")
+    tty.flush()
+
+
+def note(tty, title: str, lines: list[str]) -> None:
+    tty.write(f"{_c('36', _S_ACTIVE)}  {_c('1', title)}\n")
+    for line in lines:
+        tty.write(f"{_bar()}  {line}\n")
+    tty.write(f"{_bar()}\n")
+    tty.flush()
+
+
+def outro(tty, message: str) -> None:
+    tty.write(f"{_c('36', '└')}  {message}\n")
+    tty.flush()
+
+
+def cancel(tty, message: str) -> None:
+    tty.write(f"{_c('36', '└')}  {message}\n")
+    tty.flush()
+
+
+def _supports_keys(tty) -> bool:
+    """True when the tty can report individual key presses (POSIX termios)."""
+    try:
+        import termios  # noqa: F401
+    except ImportError:
+        return False
+    try:
+        return os.isatty(tty.fileno())
+    except (AttributeError, OSError):
+        return False
+
+
+@contextlib.contextmanager
+def _cbreak(fd: int):
+    """Put fd in cbreak mode: unbuffered, unechoed input; cooked output.
+
+    cbreak (unlike raw) keeps OPOST, so "\\n" still prints as CR+LF.
+    """
+    import termios
+    import tty as tty_module
+
+    old = termios.tcgetattr(fd)
+    try:
+        tty_module.setcbreak(fd)
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+_ESCAPE_KEYS = {"[A": "up", "[B": "down", "[C": "right", "[D": "left",
+                "OA": "up", "OB": "down"}
+
+
+def _read_key(fd: int) -> str:
+    """Read one key press from a cbreak fd. Returns 'up', 'down', 'enter',
+    'space', 'esc', or the decoded character."""
+    ch = os.read(fd, 1)
+    if ch == b"\x03":
+        raise KeyboardInterrupt
+    if ch in (b"\r", b"\n"):
+        return "enter"
+    if ch == b" ":
+        return "space"
+    if ch == b"\x1b":
+        if select.select([fd], [], [], 0.05)[0]:
+            return _ESCAPE_KEYS.get(os.read(fd, 2).decode(errors="replace"), "esc")
+        return "esc"
+    return ch.decode(errors="replace").lower()
+
+
+def confirm(tty, question: str, default: bool = True) -> bool:
+    """Single-keypress y/n confirm; falls back to line input without termios."""
+    if not _supports_keys(tty):
+        return ask(tty, question, default)
+    suffix = "[Y/n]" if default else "[y/N]"
+    tty.write(f"{_c('36', _S_ACTIVE)}  {question} {_c('2', suffix)} ")
+    tty.flush()
+    with _cbreak(tty.fileno()):
+        while True:
+            key = _read_key(tty.fileno())
+            if key == "enter":
+                answer = default
+                break
+            if key == "y":
+                answer = True
+                break
+            if key == "n":
+                answer = False
+                break
+    word = "yes" if answer else "no"
+    tty.write(f"\r\x1b[2K{_c('36', _S_DONE)}  {question} {_c('2', word)}\n")
+    tty.flush()
+    return answer
+
+
+class _Menu:
+    """Cursor/toggle state for a multiselect; kept tty-free for testing."""
+
+    def __init__(self, count: int, chosen):
+        self.count = count
+        self.cursor = 0
+        self.chosen = set(chosen)
+        self.done = False
+
+    def press(self, key: str) -> None:
+        if key in ("up", "k"):
+            self.cursor = (self.cursor - 1) % self.count
+        elif key in ("down", "j"):
+            self.cursor = (self.cursor + 1) % self.count
+        elif key == "space":
+            self.chosen ^= {self.cursor}
+        elif key == "a":
+            self.chosen = set() if len(self.chosen) == self.count else set(range(self.count))
+        elif key == "enter":
+            self.done = True
+
+
+def _render_menu(question: str, options: list[tuple[str, str, str]], menu: _Menu) -> list[str]:
+    lines = [f"{_c('36', _S_ACTIVE)}  {_c('1', question)}"]
+    for i, (_key, label, hint) in enumerate(options):
+        box = _S_ON if i in menu.chosen else _S_OFF
+        entry = f"{label}{_c('2', '  ' + hint) if hint else ''}"
+        if i == menu.cursor:
+            lines.append(f"{_bar()}  {_c('36', _S_CURSOR + ' ' + box)} {_c('1', label)}{_c('2', '  ' + hint) if hint else ''}")
+        else:
+            lines.append(f"{_bar()}    {box} {entry}")
+    lines.append(f"{_bar()}  {_c('2', '↑/↓ move · space toggle · a all · enter confirm')}")
+    return lines
+
+
+def _write_lines(tty, lines: list[str]) -> None:
+    for line in lines:
+        tty.write("\x1b[2K" + line + "\n")
+    tty.flush()
+
+
+def _redraw(tty, lines: list[str]) -> None:
+    tty.write(f"\x1b[{len(lines)}A")
+    _write_lines(tty, lines)
+
+
+def _clear_lines(tty, count: int) -> None:
+    tty.write(f"\x1b[{count}A")
+    for _ in range(count):
+        tty.write("\x1b[2K\x1b[1B")
+    tty.write(f"\x1b[{count}A")
+    tty.flush()
+
+
+def multiselect(tty, question: str, options: list[tuple[str, str, str]], preselected) -> set[str]:
+    """options: (key, label, hint). Returns the chosen keys.
+
+    Arrow keys move, space toggles, 'a' toggles all, enter confirms. Without
+    termios support it asks one y/n question per option instead."""
+    if not _supports_keys(tty):
+        return {
+            key
+            for key, label, _hint in options
+            if ask(tty, f"Install the '{label}' SessionStart hook?", True)
+        }
+    menu = _Menu(len(options), preselected)
+    fd = tty.fileno()
+    lines = _render_menu(question, options, menu)
+    _write_lines(tty, lines)
+    try:
+        tty.write("\x1b[?25l")
+        tty.flush()
+        with _cbreak(fd):
+            while not menu.done:
+                menu.press(_read_key(fd))
+                if not menu.done:
+                    _redraw(tty, _render_menu(question, options, menu))
+    finally:
+        tty.write("\x1b[?25h")
+    _clear_lines(tty, len(lines))
+    names = ", ".join(options[i][1] for i in sorted(menu.chosen)) or "none"
+    tty.write(f"{_c('36', _S_DONE)}  {question}: {_c('1', names)}\n")
+    tty.flush()
+    return {options[i][0] for i in menu.chosen}
 
 
 class Spinner:
@@ -164,7 +376,7 @@ class Spinner:
         if self._thread is not None:
             self._thread.join()
         if self.tty is not None:
-            mark = "x" if exc_type else "ok"
+            mark = _c("31", "x") if exc_type else _c("32", "ok")
             self.tty.write(f"\r[{mark}] {self.label}\n")
             self.tty.flush()
         return False
@@ -646,13 +858,32 @@ def main() -> int:
     codex_home = (args.codex_home or Path(os.environ.get("CODEX_HOME", home / ".codex"))).expanduser()
     script_dir = Path(__file__).resolve().parent
     tty = None if args.yes else open_tty()
+    if (
+        tty is not None
+        and "NO_COLOR" not in os.environ
+        and os.environ.get("TERM", "") != "dumb"
+    ):
+        global _COLOR
+        _COLOR = True
 
-    print(f"{PROJECT} {VERSION}")
+    if tty is not None:
+        intro(tty, f"{PROJECT} {VERSION}")
+        note(
+            tty,
+            "What this installer does",
+            [
+                f"Merge managed SessionStart hooks into {codex_home / 'hooks.json'}",
+                "Ensure the Superpowers plugin and OpenSpec CLI are installed and current",
+                "Preserve every hook it does not manage",
+            ],
+        )
+    else:
+        print(f"{PROJECT} {VERSION}")
 
     try:
         prefs = load_prefs(codex_home)
         if tty is not None and "auto_update" not in prefs:
-            prefs["auto_update"] = ask(
+            prefs["auto_update"] = confirm(
                 tty, "Check for installer updates automatically on future runs?", True
             )
             save_prefs(codex_home, prefs)
@@ -662,7 +893,7 @@ def main() -> int:
             if latest and is_newer(latest, VERSION):
                 if prefs.get("auto_update") or (
                     tty is not None
-                    and ask(tty, f"Update the installer {VERSION} -> {latest}?", True)
+                    and confirm(tty, f"Update the installer {VERSION} -> {latest}?", True)
                 ):
                     with Spinner(f"Updating installer to {latest}", tty):
                         self_update(script_dir, latest)
@@ -676,11 +907,13 @@ def main() -> int:
         hooks = args.hooks
         if hooks is None:
             if tty is not None and not _flag_passed("--remove"):
-                hooks = {
-                    hook_id
-                    for hook_id in HOOK_DEFINITIONS
-                    if ask(tty, f"Install the '{hook_id}' SessionStart hook?", True)
-                }
+                options = [
+                    ("superpowers", "superpowers", "inject the Superpowers bootstrap every session"),
+                    ("openspec", "openspec", "inject OpenSpec context inside spec-driven projects"),
+                ]
+                hooks = multiselect(
+                    tty, "SessionStart hooks to install", options, range(len(options))
+                )
             elif _flag_passed("--remove"):
                 hooks = set()
             else:
@@ -693,8 +926,8 @@ def main() -> int:
             )
 
         skip_updates = args.skip_framework_updates
-        if not skip_updates and tty is not None:
-            skip_updates = not ask(
+        if not skip_updates and tty is not None and hooks:
+            skip_updates = not confirm(
                 tty, "Install/update the frameworks to their latest releases?", True
             )
 
@@ -728,13 +961,26 @@ def main() -> int:
         ):
             cwd = Path.cwd()
             if cwd != home and not (cwd / "openspec" / "config.yaml").is_file():
-                if ask(tty, f"Initialize OpenSpec for Codex in {cwd}?", False):
+                if confirm(tty, f"Initialize OpenSpec for Codex in {cwd}?", False):
                     init_target = cwd
         if init_target is not None:
             with Spinner(f"Initializing OpenSpec in {init_target}", tty):
                 init_openspec_project(init_target)
 
-        print("Open a new Codex session, run /hooks, and trust each changed hook definition.")
+        message = (
+            "Done — open a new Codex session, run /hooks, "
+            "and trust each changed hook definition."
+        )
+        if tty is not None:
+            outro(tty, message)
+        else:
+            print(message)
+    except KeyboardInterrupt:
+        if tty is not None:
+            cancel(tty, "Aborted.")
+        else:
+            print("\nAborted.", file=sys.stderr)
+        return 130
     except InstallError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
