@@ -1,26 +1,30 @@
 {
-  "description": "Example ~/.codex/hooks.json with this repo's SessionStart hooks. Prefer running ./install.sh — it merges these into your existing hooks.json instead of replacing it.",
+  "description": "Reference only. Run install.py so paths, interpreter commands, backups, and existing-hook preservation are handled safely.",
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "^(startup|clear|compact)$",
         "hooks": [
           {
             "type": "command",
-            "command": "bash /absolute/path/to/codex-session-hooks/session-start.sh",
-            "statusMessage": "Loading superpowers",
-            "additionalContextLimit": 8000
+            "command": "python3 '/absolute/path/to/codex-session-hooks/superpowers-bootstrap.py' --managed-by=codex-session-hooks",
+            "commandWindows": "python \"C:\\absolute\\path\\to\\codex-session-hooks\\superpowers-bootstrap.py\" --managed-by=codex-session-hooks",
+            "statusMessage": "Loading Superpowers context",
+            "timeout": 15,
+            "additionalContextLimit": 2500
           }
         ]
       },
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "^(startup|clear|compact)$",
         "hooks": [
           {
             "type": "command",
-            "command": "bash /absolute/path/to/codex-session-hooks/openspec-detect.sh",
-            "statusMessage": "Loading openspec context",
-            "additionalContextLimit": 8000
+            "command": "python3 '/absolute/path/to/codex-session-hooks/openspec-context.py' --managed-by=codex-session-hooks",
+            "commandWindows": "python \"C:\\absolute\\path\\to\\codex-session-hooks\\openspec-context.py\" --managed-by=codex-session-hooks",
+            "statusMessage": "Loading OpenSpec context",
+            "timeout": 15,
+            "additionalContextLimit": 2500
           }
         ]
       }
