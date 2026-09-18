@@ -28,6 +28,31 @@ Codex documents plain `SessionStart` stdout as extra developer context. These ho
 
 ## Install
 
+One line, no clone required:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/IGUNUBLUE/codex-session-hooks/main/install.sh | bash
+```
+
+The standalone installer downloads the repository into `${XDG_DATA_HOME:-~/.local/share}/codex-session-hooks` and configures the hooks to run from that stable path. Re-running the same command upgrades to the latest `main`. Because the hook command definitions keep pointing at the same paths, no `/hooks` re-approval is needed after an upgrade — but review repository changes before pulling them.
+
+Useful variations:
+
+```bash
+# Forward installer flags through bash -s --
+curl -fsSL .../install.sh | bash -s -- --hooks openspec
+
+# Pin a release tag instead of tracking main
+curl -fsSL .../install.sh | env CODEX_HOOKS_REF=v1.0.0 bash
+
+# Change where the repository is installed
+curl -fsSL .../install.sh | env CODEX_HOOKS_HOME=/opt/codex-session-hooks bash
+```
+
+As with any piped installer, review `install.sh` before running it.
+
+From a checkout (works the same as before):
+
 ```bash
 git clone https://github.com/IGUNUBLUE/codex-session-hooks
 cd codex-session-hooks
