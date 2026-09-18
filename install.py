@@ -185,13 +185,11 @@ def detect_openspec_manager(requested: str) -> str:
             if location and _is_under(executable, Path(location)):
                 return manager
 
-    if volta:
-        return "volta"
-    for manager in ("npm", "pnpm", "bun", "yarn"):
+    for manager in ("npm", "pnpm", "bun", "yarn", "volta"):
         if shutil.which(manager):
             return manager
     raise InstallError(
-        "no supported OpenSpec package manager found (volta, npm, pnpm, bun, or Yarn 1)"
+        "no supported OpenSpec package manager found (npm, pnpm, bun, Yarn 1, or volta)"
     )
 
 
