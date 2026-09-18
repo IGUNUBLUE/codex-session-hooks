@@ -121,6 +121,46 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), data)
 
 
+class InitOpenSpecTests(unittest.TestCase):
+    def test_fresh_project_runs_init(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(
+                installer, "require_command", return_value="/usr/bin/openspec"
+            ), mock.patch.object(installer, "run_command") as run:
+                # Simulate init creating the config file.
+                def fake_run(args, **kwargs):
+                    (Path(directory) / "openspec").mkdir(exist_ok=True)
+                    (Path(directory) / "openspec" / "config.yaml").write_text("")
+                    return mock.Mock()
+
+                run.side_effect = fake_run
+                installer.init_openspec_project(Path(directory))
+
+            args = run.call_args.args[0]
+            self.assertEqual(args[1:], ["init", "--tools", "codex"])
+            self.assertEqual(run.call_args.kwargs["cwd"], Path(directory).resolve())
+
+    def test_existing_project_runs_update(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "openspec").mkdir()
+            (root / "openspec" / "config.yaml").write_text("")
+            with mock.patch.object(
+                installer, "require_command", return_value="/usr/bin/openspec"
+            ), mock.patch.object(installer, "run_command") as run:
+                installer.init_openspec_project(root)
+
+            args = run.call_args.args[0]
+            self.assertEqual(args[1:], ["update", "--force"])
+
+    def test_missing_directory_fails(self):
+        with self.assertRaises(installer.InstallError):
+            with mock.patch.object(
+                installer, "require_command", return_value="/usr/bin/openspec"
+            ):
+                installer.init_openspec_project(Path("/nonexistent-xyz"))
+
+
 class OpenSpecTests(unittest.TestCase):
     def test_finds_nearest_ancestor_project(self):
         with tempfile.TemporaryDirectory() as directory:

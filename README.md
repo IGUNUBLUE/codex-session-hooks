@@ -131,7 +131,19 @@ Upstream: <https://github.com/obra/superpowers>
 
 ### OpenSpec
 
-The installer updates the global CLI. To initialize a repository for current Codex skill delivery:
+The installer updates the global CLI. OpenSpec also needs a per-project step: `openspec init` writes files into the working tree (`openspec/`, `.agents/skills/`), so it must be an explicit, consented action per repository — never something a session hook does implicitly.
+
+Run it from the project you want to enable:
+
+```bash
+# Initialize the current directory for Codex skill delivery
+./install.sh --openspec-init
+
+# Or point at another project; refreshes the integration if already initialized
+./install.sh --openspec-init ../other-repo
+```
+
+Equivalent upstream command:
 
 ```bash
 cd your-project
