@@ -23,7 +23,7 @@ import threading
 import urllib.request
 
 PROJECT = "codex-session-hooks"
-VERSION = "1.5.1"  # released version; bump before tagging
+VERSION = "1.5.2"  # released version; bump before tagging
 REPO = "IGUNUBLUE/codex-session-hooks"
 PREFS_FILE = "codex-session-hooks.json"
 MARKER = f"--managed-by={PROJECT}"
@@ -777,6 +777,7 @@ def load_hooks(path: Path) -> dict[str, object]:
 
 def enable_codex_hooks(codex_home: Path) -> None:
     codex = require_command("codex")
+    codex_home.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["CODEX_HOME"] = str(codex_home)
     run_command([codex, "features", "enable", "hooks"], env=env)
