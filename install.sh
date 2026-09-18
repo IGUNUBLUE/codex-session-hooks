@@ -1,23 +1,31 @@
 #!/usr/bin/env bash
-# Merges the superpowers SessionStart hook into ~/.codex/hooks.json
+# Merges this repo's SessionStart hooks into ~/.codex/hooks.json
 # without disturbing existing hooks. Idempotent: safe to re-run.
+#
+# Handlers are matched by script basename, so re-running after moving or
+# renaming this repo fixes stale command paths in place.
 set -euo pipefail
 
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 HOOKS_JSON="$CODEX_HOME/hooks.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOOK_CMD="bash $SCRIPT_DIR/session-start.sh"
 
 mkdir -p "$CODEX_HOME"
 [[ -f "$HOOKS_JSON" ]] || printf '{\n  "hooks": {}\n}\n' > "$HOOKS_JSON"
 
 cp "$HOOKS_JSON" "$HOOKS_JSON.bak.$(date +%Y%m%d%H%M%S)"
 
-HOOK_CMD="$HOOK_CMD" HOOKS_JSON="$HOOKS_JSON" python3 - <<'PY'
+SCRIPT_DIR="$SCRIPT_DIR" HOOKS_JSON="$HOOKS_JSON" python3 - <<'PY'
 import json, os, sys
 
 path = os.environ["HOOKS_JSON"]
-cmd = os.environ["HOOK_CMD"]
+script_dir = os.environ["SCRIPT_DIR"]
+
+# (script basename, statusMessage shown while the hook runs)
+HANDLERS = [
+    ("session-start.sh", "Loading superpowers"),
+    ("openspec-detect.sh", "Loading openspec context"),
+]
 
 with open(path) as f:
     try:
@@ -26,26 +34,38 @@ with open(path) as f:
         sys.exit(f"error: {path} is not valid JSON — fix it first (backup was saved)")
 
 session_start = data.setdefault("hooks", {}).setdefault("SessionStart", [])
+changed = False
 
-def already_installed(group):
-    return any(h.get("command") == cmd for h in group.get("hooks", []))
+for script, status in HANDLERS:
+    cmd = f"bash {script_dir}/{script}"
+    found = False
+    for group in session_start:
+        for h in group.get("hooks", []):
+            if script in h.get("command", ""):
+                found = True
+                if h["command"] != cmd:
+                    h["command"] = cmd
+                    print(f"updated path -> {cmd}")
+                    changed = True
+    if not found:
+        session_start.append({
+            "matcher": "startup|resume|clear|compact",
+            "hooks": [{
+                "type": "command",
+                "command": cmd,
+                "statusMessage": status,
+                "additionalContextLimit": 8000,
+            }],
+        })
+        print(f"added SessionStart hook -> {cmd}")
+        changed = True
 
-if any(already_installed(g) for g in session_start):
-    print("already installed — nothing to do")
-else:
-    session_start.append({
-        "matcher": "startup|resume|clear|compact",
-        "hooks": [{
-            "type": "command",
-            "command": cmd,
-            "statusMessage": "Loading superpowers",
-            "additionalContextLimit": 8000,
-        }],
-    })
+if changed:
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
-    print(f"added SessionStart hook -> {cmd}")
+else:
+    print("all hooks already installed — nothing to do")
 PY
 
 cat <<'EOF'
@@ -53,7 +73,7 @@ cat <<'EOF'
 Done. Next steps:
 
   1. Start a new Codex session.
-  2. Run /hooks and mark the "Loading superpowers" hook as trusted.
+  2. Run /hooks and mark the new hooks as trusted.
      Codex skips untrusted hooks until you approve them.
   3. Make sure hooks are enabled in ~/.codex/config.toml:
 

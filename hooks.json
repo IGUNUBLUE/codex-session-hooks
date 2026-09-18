@@ -1,5 +1,5 @@
 {
-  "description": "Example ~/.codex/hooks.json with only the superpowers SessionStart hook. Prefer running ./install.sh — it merges this into your existing hooks.json instead of replacing it.",
+  "description": "Example ~/.codex/hooks.json with this repo's SessionStart hooks. Prefer running ./install.sh — it merges these into your existing hooks.json instead of replacing it.",
   "hooks": {
     "SessionStart": [
       {
@@ -7,8 +7,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /absolute/path/to/codex-superpowers-hook/session-start.sh",
+            "command": "bash /absolute/path/to/codex-session-hooks/session-start.sh",
             "statusMessage": "Loading superpowers",
+            "additionalContextLimit": 8000
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /absolute/path/to/codex-session-hooks/openspec-detect.sh",
+            "statusMessage": "Loading openspec context",
             "additionalContextLimit": 8000
           }
         ]
