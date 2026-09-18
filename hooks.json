@@ -1,0 +1,18 @@
+{
+  "description": "Example ~/.codex/hooks.json with only the superpowers SessionStart hook. Prefer running ./install.sh — it merges this into your existing hooks.json instead of replacing it.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /absolute/path/to/codex-superpowers-hook/session-start.sh",
+            "statusMessage": "Loading superpowers",
+            "additionalContextLimit": 8000
+          }
+        ]
+      }
+    ]
+  }
+}
