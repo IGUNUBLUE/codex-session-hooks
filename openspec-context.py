@@ -77,7 +77,17 @@ def render_context(project_root: Path, skill_names: list[str]) -> str:
             "No generated Codex OpenSpec skills were found. Do not guess invocation names; "
             "the project needs `openspec update` or `openspec init --tools codex`."
         )
-    lines.extend(["</openspec-context>", ""])
+    lines.extend(
+        [
+            "Framework precedence: when work creates or modifies specified behavior, the "
+            "OpenSpec change artifacts are the system of record. Process skills from other "
+            "frameworks may still apply inside a change for implementation discipline "
+            "(testing, debugging, review), but documents they generate must reference the "
+            "OpenSpec spec rather than restate or replace it.",
+            "</openspec-context>",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 

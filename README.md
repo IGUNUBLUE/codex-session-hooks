@@ -19,6 +19,17 @@ OpenSpec is different: its workflows are designed for explicit skill invocation.
 
 Codex documents plain `SessionStart` stdout as extra developer context. These hooks run on `startup`, `clear`, and after `compact`. They intentionally skip `resume` to avoid duplicating context already stored in a resumed transcript.
 
+## Superpowers + OpenSpec composition
+
+The two frameworks operate on different axes. Superpowers is a development *process* discipline (brainstorm, plan, TDD, debug, verify, review); OpenSpec is an *artifact* governance layer (`specs/` as source of truth, `changes/` as deltas, `archive` as merge). Their skill descriptions overlap at the ideation and planning stages, where both claim first position — and Superpowers' bootstrap pushes automatic invocation while OpenSpec skills are designed for explicit invocation.
+
+The OpenSpec hook resolves this by injecting an explicit precedence rule whenever it detects an OpenSpec project: **for work that creates or modifies specified behavior, the OpenSpec change artifacts are the system of record**. Process skills from other frameworks may still apply *inside* a change for implementation discipline (testing, debugging, review), but documents they generate must reference the OpenSpec spec rather than restate or replace it. The rule rides in the conditional hook, so it costs zero context in projects without OpenSpec.
+
+Two upstream design choices make this composition safe:
+
+- Every generated OpenSpec skill carries an auto-selected escape hatch: if it was triggered without an explicit OpenSpec request, it instructs the agent to answer normally rather than imposing the spec workflow.
+- Superpowers' own bootstrap declares that user instructions (`AGENTS.md`, direct requests) take precedence over skills — so repository rules can still override this default ordering.
+
 ## Prerequisites
 
 - A recent Codex CLI exposing `codex plugin` and lifecycle hooks.

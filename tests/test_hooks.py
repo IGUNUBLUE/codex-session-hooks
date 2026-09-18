@@ -168,6 +168,12 @@ class OpenSpecTests(unittest.TestCase):
         self.assertNotIn("In-flight changes", rendered)
         self.assertIn("$openspec-archive-change", rendered)
 
+    def test_context_declares_framework_precedence(self):
+        for names in ([], ["openspec-propose"]):
+            rendered = openspec.render_context(Path("/project"), names)
+            self.assertIn("system of record", rendered)
+            self.assertIn("reference the OpenSpec spec", rendered)
+
 
 class SuperpowersTests(unittest.TestCase):
     def test_uses_exact_active_marketplace_version_not_path_sorting(self):
