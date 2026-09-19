@@ -82,4 +82,11 @@ if ! command -v python3 >/dev/null 2>&1; then
     echo "error: python3 is required" >&2
     exit 1
 fi
+
+# Reattach stdin to the controlling terminal when one is usable, so the
+# interactive prompts work even though this script itself arrived via a pipe.
+# If /dev/tty cannot be opened there is no controlling terminal to recover.
+if [ ! -t 0 ] && { : </dev/tty; } 2>/dev/null; then
+    exec python3 "$src_dir/install.py" "$@" </dev/tty
+fi
 exec python3 "$src_dir/install.py" "$@"
