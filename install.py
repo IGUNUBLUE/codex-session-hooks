@@ -23,7 +23,7 @@ import threading
 import urllib.request
 
 PROJECT = "codex-session-hooks"
-VERSION = "1.5.2"  # released version; bump before tagging
+VERSION = "1.5.3"  # released version; bump before tagging
 REPO = "IGUNUBLUE/codex-session-hooks"
 PREFS_FILE = "codex-session-hooks.json"
 MARKER = f"--managed-by={PROJECT}"
@@ -118,9 +118,14 @@ def open_tty():
     """
     try:
         return os.fdopen(os.open("/dev/tty", os.O_RDWR), "r+")
-    except OSError:
+    except OSError as error:
         if sys.stdin.isatty():
             return _StdTty()
+        if os.environ.get("CODEX_HOOKS_DEBUG"):
+            print(
+                f"debug: no interactive terminal ({error}; stdin is not a tty)",
+                file=sys.stderr,
+            )
         return None
 
 
