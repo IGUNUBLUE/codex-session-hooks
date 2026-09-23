@@ -934,6 +934,38 @@ def migrate_legacy_hook_dir(repo_root: Path) -> None:
         legacy.rmdir()
 
 
+def installed_hook_ids(repo_root: Path) -> set[str]:
+    ids: set[str] = set()
+    hooks_path = repo_root / ".codex" / "hooks.json"
+    if hooks_path.is_file():
+        try:
+            data = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        for group in data.get("hooks", {}).get("SessionStart", []):
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                continue
+            for handler in group["hooks"]:
+                hook_id = managed_hook_id(handler)
+                if hook_id:
+                    ids.add(hook_id)
+    script_to_id = {
+        definition["script"]: hook_id
+        for hook_id, definition in HOOK_DEFINITIONS.items()
+    }
+    for harness in ("opencode", "omp"):
+        path = repo_root / str(HARNESSES[harness]["adapter_rel"])
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if MARKER_TS not in text:
+            continue
+        for script in re.findall(r'"([^"]+\.py)"', text):
+            if script in script_to_id:
+                ids.add(script_to_id[script])
+    return ids
+
+
 MARKER_TS = "// managed-by: codex-session-hooks"
 
 OPENCODE_ADAPTER_TEMPLATE = """{marker}
@@ -1058,14 +1090,14 @@ def apply_harnesses(
     codex_home: Path,
 ) -> None:
     migrate_legacy_hook_dir(repo_root)
-    install_hook_scripts(repo_root, hook_ids)
-    remove_hook_scripts(repo_root, remove_ids)
+    effective = (installed_hook_ids(repo_root) | hook_ids) - remove_ids
+    install_hook_scripts(repo_root, effective)
 
     writers = {"opencode": write_opencode_adapter, "omp": write_omp_adapter}
     for harness, writer in writers.items():
         path = repo_root / str(HARNESSES[harness]["adapter_rel"])
-        if harness in harnesses and hook_ids:
-            writer(repo_root, hook_ids)
+        if harness in harnesses and effective:
+            writer(repo_root, effective)
         else:
             remove_managed_adapter(path)
 
@@ -1509,7 +1541,8 @@ def main() -> int:
 
         cleanup_global_hooks(codex_home, tty, args.yes)
 
-        message = f"Done — session hooks installed for {', '.join(sorted(harnesses))} in {repo_root}."
+        names = ", ".join(sorted(harnesses)) or "no harnesses"
+        message = f"Done — session hooks installed for {names} in {repo_root}."
         if "codex" in harnesses:
             message += (
                 " Open a Codex session there, trust the project, "

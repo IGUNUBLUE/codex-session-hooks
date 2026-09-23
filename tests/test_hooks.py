@@ -744,6 +744,118 @@ class HarnessTests(unittest.TestCase):
                 (repo / ".omp/extensions/session-hooks.ts").exists()
             )
 
+    def test_apply_harnesses_hooks_subset_preserves_unselected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            with mock.patch.object(installer, "enable_codex_hooks"):
+                installer.apply_harnesses(
+                    repo,
+                    {"codex", "opencode", "omp"},
+                    {"superpowers", "openspec"},
+                    set(),
+                    False,
+                    repo / "ch",
+                )
+                installer.apply_harnesses(
+                    repo,
+                    {"codex", "opencode", "omp"},
+                    {"superpowers"},
+                    set(),
+                    False,
+                    repo / "ch",
+                )
+            data = json.loads((repo / ".codex/hooks.json").read_text())
+            commands = [
+                h["command"]
+                for g in data["hooks"]["SessionStart"]
+                for h in g["hooks"]
+            ]
+            self.assertEqual(len(commands), 2)
+            for script in ("openspec-context.py", "superpowers-bootstrap.py"):
+                self.assertTrue((repo / ".agents/session-hooks" / script).is_file())
+            for adapter in (
+                repo / ".opencode/plugins/session-hooks.ts",
+                repo / ".omp/extensions/session-hooks.ts",
+            ):
+                text = adapter.read_text()
+                self.assertIn("openspec-context.py", text)
+                self.assertIn("superpowers-bootstrap.py", text)
+
+    def test_apply_harnesses_remove_only_keeps_others(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            with mock.patch.object(installer, "enable_codex_hooks"):
+                installer.apply_harnesses(
+                    repo,
+                    {"codex", "opencode", "omp"},
+                    {"superpowers", "openspec"},
+                    set(),
+                    False,
+                    repo / "ch",
+                )
+                installer.apply_harnesses(
+                    repo,
+                    {"codex", "opencode", "omp"},
+                    set(),
+                    {"openspec"},
+                    False,
+                    repo / "ch",
+                )
+            data = json.loads((repo / ".codex/hooks.json").read_text())
+            commands = [
+                h["command"]
+                for g in data["hooks"]["SessionStart"]
+                for h in g["hooks"]
+            ]
+            self.assertEqual(len(commands), 1)
+            self.assertIn("superpowers-bootstrap.py", commands[0])
+            self.assertTrue(
+                (repo / ".agents/session-hooks/superpowers-bootstrap.py").is_file()
+            )
+            self.assertFalse(
+                (repo / ".agents/session-hooks/openspec-context.py").exists()
+            )
+            for adapter in (
+                repo / ".opencode/plugins/session-hooks.ts",
+                repo / ".omp/extensions/session-hooks.ts",
+            ):
+                text = adapter.read_text()
+                self.assertIn("superpowers-bootstrap.py", text)
+                self.assertNotIn("openspec-context.py", text)
+
+    def test_apply_harnesses_hooks_none_is_noop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            with mock.patch.object(installer, "enable_codex_hooks"):
+                installer.apply_harnesses(
+                    repo,
+                    {"codex", "opencode", "omp"},
+                    {"superpowers", "openspec"},
+                    set(),
+                    False,
+                    repo / "ch",
+                )
+                installer.apply_harnesses(
+                    repo,
+                    {"codex", "opencode", "omp"},
+                    set(),
+                    set(),
+                    False,
+                    repo / "ch",
+                )
+            data = json.loads((repo / ".codex/hooks.json").read_text())
+            commands = [
+                h["command"]
+                for g in data["hooks"]["SessionStart"]
+                for h in g["hooks"]
+            ]
+            self.assertEqual(len(commands), 2)
+            for adapter in (
+                repo / ".opencode/plugins/session-hooks.ts",
+                repo / ".omp/extensions/session-hooks.ts",
+            ):
+                self.assertIn("openspec-context.py", adapter.read_text())
+
     def test_gitignore_entries_per_harness(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
