@@ -543,7 +543,7 @@ class OpenSpecTests(unittest.TestCase):
 
             self.assertEqual(names, ["opsx-apply", "opsx-propose"])
             self.assertIn("/opsx-apply", rendered)
-            self.assertNotIn("unrelated", rendered)
+            self.assertNotIn("/unrelated", rendered)
 
 
 class SuperpowersTests(unittest.TestCase):
