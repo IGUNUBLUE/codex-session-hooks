@@ -24,7 +24,7 @@ import threading
 import urllib.request
 
 PROJECT = "codex-session-hooks"
-VERSION = "2.0.0"  # released version; bump before tagging
+VERSION = "2.1.0"  # released version; bump before tagging
 REPO = "IGUNUBLUE/codex-session-hooks"
 SUPERPOWERS_REPO = "obra/superpowers"
 PREFS_FILE = "codex-session-hooks.json"
@@ -600,9 +600,6 @@ def gitignore_entries(repo_root: Path, harnesses: set[str] | None = None) -> lis
     ]
     if "codex" in selected:
         entries.insert(0, "/.codex/hooks.json")
-    for harness in ("opencode", "omp"):
-        if harness in selected:
-            entries.append("/" + str(HARNESSES[harness]["adapter_rel"]))
     manifest = load_manifest(repo_root)
     entries += [
         f"/.agents/skills/{name}/"
@@ -940,7 +937,6 @@ def migrate_legacy_hook_dir(repo_root: Path) -> None:
 MARKER_TS = "// managed-by: codex-session-hooks"
 
 OPENCODE_ADAPTER_TEMPLATE = """{marker}
-import {{ Plugin }} from "@opencode/plugin"
 import {{ spawnSync }} from "node:child_process"
 
 const SCRIPTS = {scripts}
@@ -961,7 +957,7 @@ function runHandlers(dir: string): string[] {{
   return out
 }}
 
-export default Plugin.define({{
+export default {{
   id: "codex-session-hooks",
   async setup(ctx) {{
     const contexts = runHandlers(ctx.location.directory)
@@ -970,7 +966,7 @@ export default Plugin.define({{
       for (const text of contexts) event.system.push({{ type: "text", text }})
     }})
   }},
-}})
+}}
 """
 
 OMP_ADAPTER_TEMPLATE = """{marker}

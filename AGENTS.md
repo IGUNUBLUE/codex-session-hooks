@@ -2,21 +2,29 @@
 
 ## Project overview
 
-`codex-session-hooks` installs and manages Codex CLI `SessionStart` hooks that
-inject framework context into sessions — **repo-scoped**: hooks land in
-`<repo>/.codex/hooks.json`, scripts in `<repo>/.codex/hooks/`, and Superpowers
+`codex-session-hooks` installs and manages session-context hooks that inject
+framework context into sessions — **repo-scoped and multi-harness**: the
+shared Python handlers land in `<repo>/.agents/session-hooks/`, Superpowers
 skills are materialized from the upstream `obra/superpowers` release tarball
-into `<repo>/.agents/skills/` (Codex's official REPO-scope discovery). Nothing
-is written to `~/.codex/hooks.json`. It does **not** fork or vendor either
-framework — skills are fetched from upstream at install time, never edited.
+into `<repo>/.agents/skills/`, and per-harness wiring goes to
+`<repo>/.codex/hooks.json` (Codex), `<repo>/.opencode/plugins/session-hooks.ts`
+(OpenCode v2), and `<repo>/.omp/extensions/session-hooks.ts` (oh-my-pi).
+Nothing is written to `~/.codex/hooks.json` or any global plugin/extension
+dir. It does **not** fork or vendor either framework — skills are fetched
+from upstream at install time, never edited.
 
-Two managed hooks, matched on `^(startup|clear|compact)$` (resume is skipped
-on purpose — the resumed transcript already carries the context):
+Two managed contexts — `superpowers` and `openspec` — selected by `--hooks`;
+`--harness codex,opencode,omp` selects where they install (default: detected
+CLIs). Each harness consumes them through its official mechanism: Codex runs
+the handlers as `SessionStart` command hooks matched on
+`^(startup|clear|compact)$` (resume is skipped on purpose); OpenCode caches
+their stdout and pushes it to `event.system` per model call; oh-my-pi injects
+a deduplicated custom message via its `context` event.
 
 | Hook | Script | Emits |
 |---|---|---|
 | `superpowers` | `superpowers-bootstrap.py` | The repo's `.agents/skills/using-superpowers/SKILL.md` (walks ancestors of the script location; falls back to `~/.agents/skills` and `$CODEX_HOME/skills`) |
-| `openspec` | `openspec-context.py` | Nearest ancestor `openspec/config.yaml` context: discovered `openspec-*` skills, CLI-missing warning, and the framework-precedence rule. Silent outside OpenSpec projects |
+| `openspec` | `openspec-context.py` | Nearest ancestor `openspec/config.yaml` context: discovered `openspec-*` skills, `opsx-*` commands under `.opencode/commands` and `.omp/commands`, CLI-missing warning, and the framework-precedence rule. Silent outside OpenSpec projects |
 
 Everything is stdlib-only Python 3.10+ (`from __future__ import annotations`)
 and POSIX shell. There are no third-party dependencies and none should be
@@ -24,17 +32,19 @@ added — the installer must stay runnable via `curl | bash` on a bare machine.
 
 ## Repository layout
 
-- `install.py` — installer: repo resolution (`--repo` / git root), Superpowers
-  tarball materialization into `.agents/skills` (manifest-tracked), OpenSpec
-  CLI update, `.codex/hooks.json` merge in the target repo, `.gitignore`
-  managed block, global-hooks cleanup, guided TUI, self-update. All logic
-  lives here; keep it dependency-free.
+- `install.py` — installer: repo resolution (`--repo` / git root), `--harness`
+  selection + CLI detection, Superpowers tarball materialization into
+  `.agents/skills` (manifest-tracked), OpenSpec CLI update, `.codex/hooks.json`
+  merge, TS adapter generation for opencode/omp, `.gitignore` managed block,
+  global-hooks cleanup, guided TUI, self-update. All logic lives here; keep
+  it dependency-free.
 - `install.sh` — entry point. Dual mode: runs `install.py` in place from a
   clone, or downloads the repo tarball into a *temporary* directory when piped
   (hook commands resolve via `git rev-parse`, so no persistent dir is needed).
-- `superpowers-bootstrap.py`, `openspec-context.py` — SessionStart handlers.
-  Copied into `<repo>/.codex/hooks/` at install time. Must stay fast (hook
-  timeout is 15s) and print nothing when inactive.
+- `superpowers-bootstrap.py`, `openspec-context.py` — shared handlers, copied
+  into `<repo>/.agents/session-hooks/` at install time and invoked by every
+  harness's wiring. Must stay fast (Codex hook timeout is 15s) and print
+  nothing when inactive.
 - `session-start.sh`, `openspec-detect.sh` — legacy handlers kept only so the
   installer can recognize and migrate old installs (see `legacy_scripts`).
 - `hooks.json` — reference shape only; never edited by hand for real installs.
@@ -43,9 +53,10 @@ added — the installer must stay runnable via `curl | bash` on a bare machine.
 
 ## Setup and verification
 
-Prerequisites the installer verifies but does not install: Codex CLI,
-Python ≥3.10, `git` (hook commands resolve via `git rev-parse`), Node.js
-≥20.19.0, and one JS package manager
+Prerequisites the installer verifies but does not install: at least one
+harness CLI (`codex`, `opencode` v2, `omp` — auto-detected, `--harness`
+overrides), Python ≥3.10, `git` (Codex hook commands resolve via
+`git rev-parse`), Node.js ≥20.19.0, and one JS package manager
 (npm → pnpm → bun → Yarn 1 → volta, in preference order for fresh installs;
 an existing Volta-owned OpenSpec stays on Volta).
 
@@ -61,6 +72,7 @@ python3 -m json.tool hooks.json >/dev/null
 ./install.sh -y              # non-interactive, targets the git root of cwd
 ./install.sh --repo /path/to/repo
 ./install.sh --hooks openspec --skip-framework-updates
+./install.sh --harness codex,omp        # subset of harnesses (default: detected)
 ./install.sh --superpowers-ref v6.4.1   # pin upstream instead of latest
 ./install.sh --openspec-init [DIR]      # explicit per-project OpenSpec setup
 
@@ -84,9 +96,17 @@ back to line mode, which is what most prompt tests want.
 - **Atomic writes.** `hooks.json` is replaced via temp-file + `os.replace`
   with a timestamped `.bak` backup. No partial writes.
 - **Git-root hook commands.** Repo hooks use
-  `"$(git rev-parse --show-toplevel)/.codex/hooks/<script>"` — double-quoted,
-  never single-quoted (substitution must survive). `--repo` targets outside a
-  git repo fall back to absolute paths with a warning.
+  `"$(git rev-parse --show-toplevel)/.agents/session-hooks/<script>"` —
+  double-quoted, never single-quoted (substitution must survive). `--repo`
+  targets outside a git repo fall back to absolute paths with a warning.
+- **Adapter ownership.** `.opencode/plugins/session-hooks.ts` and
+  `.omp/extensions/session-hooks.ts` are whole-file managed via the
+  `// managed-by: codex-session-hooks` header — regenerated or deleted as a
+  unit; foreign files in those dirs are never touched. Adapters are *not*
+  gitignored: omp extension discovery honors `.gitignore`.
+- **Adapter portability.** The OpenCode adapter exports a plain
+  `{id, setup}` object — `@opencode/plugin` does not resolve in
+  auto-discovered project plugins (verified on v2.0.15).
 - **Manifest ownership.** `.agents/skills/.codex-session-hooks.json` lists the
   Superpowers skill dirs we manage; only those are updated or deleted.
 - **Tarball safety.** `_extract_skills` rejects `..` members and non-file
@@ -96,7 +116,8 @@ back to line mode, which is what most prompt tests want.
   explicit `--openspec-init` flag, never from a hook.
 - **Conditional context.** `openspec-context.py` emits nothing outside an
   initialized OpenSpec project; it exposes only skill names matching
-  `^openspec-[a-z0-9][a-z0-9-]*$` and warns when the `openspec` CLI is absent.
+  `^openspec-[a-z0-9][a-z0-9-]*$` and command files matching `opsx-*.md`,
+  and warns when the `openspec` CLI is absent.
 - **Graceful degradation.** Every interactive feature has a fallback:
   no `/dev/tty` → stdin tty → non-interactive; no `termios` (Windows) →
   line-mode prompts; `NO_COLOR`/`TERM=dumb` → no ANSI.

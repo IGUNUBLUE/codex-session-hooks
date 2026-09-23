@@ -4,8 +4,9 @@
 
 ## Release
 
-- Latest release: **v2.0.0** (in progress) — repo-scoped install. Breaking
+- Latest release: **v2.0.0** (published) — repo-scoped install. Breaking
   change from 1.x: nothing is written to `~/.codex/hooks.json` anymore.
+- In development: **v2.1.0** — multi-harness (`--harness codex,opencode,omp`).
 - Public repo: https://github.com/IGUNUBLUE/codex-session-hooks
 - Dev clone: `~/Projects/codex-session-hooks` (location-independent).
 - No persistent runtime dir since v2: piped `install.sh` downloads to a
@@ -15,33 +16,48 @@
 ## Installed framework versions (this machine)
 
 - Superpowers skills materialized per-repo from `obra/superpowers` release
-  tarballs into `<repo>/.agents/skills/` (manifest-tracked).
-- OpenSpec CLI `1.13.1` — `@fission-ai/openspec`, Volta-managed
+  tarballs into `<repo>/.agents/skills/` (manifest-tracked); tested v6.4.1.
+- OpenSpec CLI `1.13.2` — `@fission-ai/openspec`, Volta-managed
   (`~/.volta/bin/openspec`). Global tool, per-project init.
-- Codex hooks feature enabled globally (`[features] hooks=true` in
-  `~/.codex/config.toml` — user capability flag, not a repo artifact).
-- Legacy managed hooks in `~/.codex/hooks.json` are offered for cleanup on
-  the next installer run; unrelated hooks (`herdr`) preserved.
+- Harness CLIs installed: Codex (hooks enabled globally via
+  `[features] hooks=true` in `~/.codex/config.toml`), OpenCode `v2.0.15`,
+  oh-my-pi `omp/18.1.21`.
+- `~/.codex/hooks.json` contains only the unrelated `herdr` hook; the v1
+  managed-runtime dir `~/.local/share/codex-session-hooks/` was deleted.
 
 ## Architecture
 
 - Install target = repo root (`--repo`, else `git rev-parse --show-toplevel`
   of cwd, else TUI prompt). Always shown and confirmed before writing.
+- `--harness` selects destinations: `codex`, `opencode`, `omp`, `all`,
+  `none`. Default: CLIs detected via `shutil.which` (TUI multiselect /
+  `-y` accepts all; falls back to `codex` when nothing is detected).
+  Deselecting a harness removes its managed adapter.
 - Repo layout after install:
+  - `<repo>/.agents/session-hooks/*.py` — shared handlers (single source of
+    context logic for all harnesses). v2.0's `.codex/hooks/` copies are
+    migrated/cleaned by the installer.
   - `<repo>/.codex/hooks.json` — merged SessionStart hooks (atomic + .bak).
-  - `<repo>/.codex/hooks/*.py` — copies of the hook scripts (self-contained).
+  - `<repo>/.opencode/plugins/session-hooks.ts` — plain `{id, setup}`
+    object (NOT `@opencode/plugin`, which does not resolve in
+    auto-discovered plugins). Runs handlers once at setup, pushes stdout
+    into `event.system` on every `context` hook call.
+  - `<repo>/.omp/extensions/session-hooks.ts` — lazy-cached handler output
+    injected as a deduplicated `custom` message in the `context` event.
   - `<repo>/.agents/skills/<superpowers-*>` — from upstream tarball; manifest
     `.codex-session-hooks.json` pins the ref and managed dirs.
-  - `<repo>/.agents/skills/openspec-*` — via `openspec init --tools codex`.
-  - `.gitignore` managed block (default local; committable via TUI choice).
-- Hook commands: `"$(git rev-parse --show-toplevel)/.codex/hooks/<script>"`
-  (officially recommended git-root form; absolute-path fallback for non-git
-  `--repo` targets; `commandWindows` uses the absolute form).
-- `superpowers-bootstrap.py` resolves `using-superpowers/SKILL.md` by walking
-  ancestors of the script for `.agents/skills`, then `~/.agents/skills`,
-  `$CODEX_HOME/skills`; `SUPERPOWERS_USING_SKILL` overrides. No more
-  `codex plugin list` in the hot path.
-- Tests: unittest suite in `tests/test_hooks.py` (load-by-path).
+  - OpenSpec per harness: `openspec init --tools codex,opencode,oh-my-pi`
+    → `.agents/skills/openspec-*`, `.opencode/commands/opsx-*`,
+    `.omp/commands/opsx-*`.
+  - `.gitignore` managed block — handlers, skills, manifest, and
+    `.codex/hooks.json` (codex only). **Adapters are never ignored**: omp
+    extension discovery honors `.gitignore` (skill discovery does not).
+- Codex hook commands: `"$(git rev-parse --show-toplevel)/.agents/
+  session-hooks/<script>"` (absolute-path fallback for non-git `--repo`
+  targets; `commandWindows` uses the absolute form).
+- `openspec-context.py` reports `opsx-*` commands from
+  `.opencode/commands` + `.omp/commands` in addition to `openspec-*` skills.
+- Tests: unittest suite in `tests/test_hooks.py` (load-by-path), 52 tests.
 
 ## Composition model (with upstream frameworks)
 
@@ -51,6 +67,9 @@
   per-project opt-in.
 - Full stack requires per-repo `./install.sh` (hooks + superpowers skills)
   and `--openspec-init` for OpenSpec projects.
+- Verified end-to-end on this machine: OpenCode v2.0.15 model confirmed the
+  injected `<superpowers-bootstrap>` block; omp 18.1.21 returned the probe
+  answer both via `--extension` and via native `.omp/extensions` discovery.
 
 ## Known upstream caveats
 
@@ -58,3 +77,7 @@
   hook defs still need `/hooks` approval. First `SessionStart` is skipped
   until then (openai/codex#35306).
 - Project hooks are ignored inside git worktrees (openai/codex#27133).
+- omp native extension discovery is cwd-only (`<cwd>/.omp/extensions`) and
+  gitignore-aware — it does not walk ancestors; run `omp` from the repo root.
+- OpenCode project plugins must not import `@opencode/plugin` (no package
+  resolution in `.opencode/plugins/`); export `{id, setup}` instead.

@@ -750,12 +750,13 @@ class HarnessTests(unittest.TestCase):
             entries = installer.gitignore_entries(repo, {"codex", "omp"})
             self.assertIn("/.codex/hooks.json", entries)
             self.assertIn("/.agents/session-hooks/", entries)
-            self.assertIn("/.omp/extensions/session-hooks.ts", entries)
+            # adapters must stay discoverable: omp's native glob honors .gitignore
+            self.assertNotIn("/.omp/extensions/session-hooks.ts", entries)
             self.assertNotIn("/.opencode/plugins/session-hooks.ts", entries)
             self.assertNotIn("/.codex/hooks/", entries)
             no_codex = installer.gitignore_entries(repo, {"opencode"})
             self.assertNotIn("/.codex/hooks.json", no_codex)
-            self.assertIn("/.opencode/plugins/session-hooks.ts", no_codex)
+            self.assertNotIn("/.opencode/plugins/session-hooks.ts", no_codex)
 
 
 if __name__ == "__main__":

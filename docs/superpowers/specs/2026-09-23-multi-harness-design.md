@@ -86,8 +86,7 @@ the new location unchanged.
 
 ```ts
 // managed-by: codex-session-hooks
-import { Plugin } from "@opencode/plugin"
-export default Plugin.define({
+export default {
   id: "codex-session-hooks",
   async setup(ctx) {
     // spawn each enabled python handler once; cache stdout per script
@@ -96,16 +95,20 @@ export default Plugin.define({
         event.system.push({ type: "text", text })
     })
   },
-})
+}
 ```
 
+- Plain-object default export — `Plugin.define` is only a wrapper.
+  **Verified**: `import { Plugin } from "@opencode/plugin"` fails to resolve
+  in auto-discovered `.opencode/plugins/*.ts` (no package.json in that dir),
+  while `{id, setup}` objects load fine (same shape the v1/v2 bridge uses).
 - Scripts run via `node:child_process` (`python3 <abs path>
   --managed-by=codex-session-hooks`), cwd = `ctx.location.directory`.
 - Output cached at setup; empty stdout → contributes nothing (silent).
 - `context` runs on every agent-loop model call, so injected context
   persists across compaction — matching our `compact` matcher semantics.
-- Implementation risk noted below: verify `@opencode/plugin` resolves in
-  auto-discovered plugins and confirm system-push behavior on v2.0.15.
+- Verified live on v2.0.15: model confirmed the injected
+  `<superpowers-bootstrap>` block present in system instructions.
 
 ### omp adapter (`.omp/extensions/session-hooks.ts`)
 
@@ -157,9 +160,15 @@ project-root detection stay identical.
 
 ### `.gitignore` managed block
 
-Adds per selected harness: `/.agents/session-hooks/`,
-`/.opencode/plugins/session-hooks.ts`, `/.omp/extensions/session-hooks.ts`.
-The existing `.codex/*` entries stay conditional on `codex`.
+Adds `/.agents/session-hooks/`, `/.agents/skills/openspec-*/`, the manifest,
+and per-skill dirs; `/.codex/hooks.json` only when `codex` is selected.
+
+**Adapter files are never ignored**: omp's native extension-module discovery
+uses a gitignore-aware glob (`discoverExtensionModulePaths`, gitignore:true),
+so an ignored `.omp/extensions/session-hooks.ts` is invisible to omp.
+Verified live: ignoring the adapter made `omp -p` sessions lose the context;
+skills discovery (`scanSkillsFromDir`) does NOT honor gitignore, so materialized
+skills stay visible either way.
 
 ### Ownership
 
