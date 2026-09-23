@@ -53,8 +53,31 @@ def find_skill_names(project_root: Path, codex_home: Path | None = None) -> list
     return sorted(names)
 
 
+COMMAND_NAME = re.compile(r"^opsx-[a-z0-9][a-z0-9-]*$")
+COMMAND_DIRS = (".opencode/commands", ".omp/commands")
+
+
+def find_command_names(project_root: Path) -> list[str]:
+    names: set[str] = set()
+    for relative in COMMAND_DIRS:
+        location = project_root / relative
+        if not location.is_dir():
+            continue
+        for candidate in location.iterdir():
+            if (
+                candidate.is_file()
+                and candidate.suffix == ".md"
+                and COMMAND_NAME.fullmatch(candidate.stem)
+            ):
+                names.add(candidate.stem)
+    return sorted(names)
+
+
 def render_context(
-    project_root: Path, skill_names: list[str], cli_available: bool = True
+    project_root: Path,
+    skill_names: list[str],
+    cli_available: bool = True,
+    command_names: list[str] | None = None,
 ) -> str:
     root = json.dumps(str(project_root))
     config = json.dumps(str(project_root / "openspec" / "config.yaml"))
@@ -79,6 +102,12 @@ def render_context(
         lines.append(
             "No generated Codex OpenSpec skills were found. Do not guess invocation names; "
             "the project needs `openspec update` or `openspec init --tools codex`."
+        )
+    if command_names:
+        invocations = ", ".join(f"/{name}" for name in command_names)
+        lines.append(
+            f"Generated OpenSpec commands available: {invocations}. "
+            "Invoke the exact matching command when a harness exposes it."
         )
     if not cli_available:
         lines.append(
@@ -113,7 +142,12 @@ def main() -> int:
     try:
         cli_available = shutil.which("openspec") is not None
         sys.stdout.write(
-            render_context(root, find_skill_names(root, codex_home), cli_available)
+            render_context(
+                root,
+                find_skill_names(root, codex_home),
+                cli_available,
+                find_command_names(root),
+            )
         )
     except OSError as error:
         print(f"codex-session-hooks: {error}", file=sys.stderr)
