@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Codex SessionStart hooks and update their upstream frameworks."""
+"""Install repo-scoped Codex SessionStart hooks and materialize framework skills."""
 
 from __future__ import annotations
 
@@ -642,60 +642,6 @@ def strip_gitignore(repo_root: Path) -> bool:
     return True
 
 
-def _plugin_listing(codex: str, include_available: bool = False) -> dict[str, object]:
-    args = [codex, "plugin", "list"]
-    if include_available:
-        args.append("--available")
-    args.append("--json")
-    result = run_command(args)
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise InstallError("Codex returned invalid plugin-list JSON") from error
-    if not isinstance(data, dict):
-        raise InstallError("Codex plugin list did not return a JSON object")
-    return data
-
-
-def _official_superpowers_entry(data: dict[str, object]) -> dict[str, object] | None:
-    installed = data.get("installed", [])
-    available = data.get("available", [])
-    entries = [
-        *(installed if isinstance(installed, list) else []),
-        *(available if isinstance(available, list) else []),
-    ]
-    return next(
-        (
-            item
-            for item in entries
-            if isinstance(item, dict)
-            and item.get("name") == "superpowers"
-            and str(item.get("marketplaceName", "")).startswith("openai-curated")
-        ),
-        None,
-    )
-
-
-def update_superpowers() -> str:
-    codex = require_command("codex")
-    entry = _official_superpowers_entry(_plugin_listing(codex))
-    if not entry:
-        entry = _official_superpowers_entry(_plugin_listing(codex, include_available=True))
-    selector = entry.get("pluginId") if entry else None
-    if not isinstance(selector, str) or not selector:
-        raise InstallError("Superpowers was not found in an official Codex marketplace")
-
-    run_command([codex, "plugin", "add", selector, "--json"])
-    entry = _official_superpowers_entry(_plugin_listing(codex))
-    if not entry or entry.get("installed") is not True or entry.get("enabled") is not True:
-        raise InstallError("Superpowers is not installed and enabled after `codex plugin add`")
-    version = entry.get("version")
-    if not isinstance(version, str) or not version:
-        raise InstallError("Codex did not report the installed Superpowers version")
-    print(f"Superpowers {version} is installed and enabled (latest official marketplace release).")
-    return version
-
-
 def _probe_output(args: list[str]) -> str | None:
     try:
         result = subprocess.run(
@@ -1137,6 +1083,19 @@ def main() -> int:
         default="auto",
     )
     parser.add_argument(
+        "--repo",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="target repository (default: git root of the current directory)",
+    )
+    parser.add_argument(
+        "--superpowers-ref",
+        default=None,
+        metavar="REF",
+        help=f"{SUPERPOWERS_REPO} git ref to materialize (default: latest release)",
+    )
+    parser.add_argument(
         "--codex-home",
         type=Path,
         default=None,
@@ -1149,7 +1108,7 @@ def main() -> int:
         type=Path,
         default=None,
         metavar="PROJECT_DIR",
-        help="initialize OpenSpec for Codex in PROJECT_DIR (default: current directory); "
+        help="initialize OpenSpec for Codex in PROJECT_DIR (default: the target repo); "
         "refreshes the integration when the project is already initialized",
     )
     args = parser.parse_args()
@@ -1172,8 +1131,9 @@ def main() -> int:
             tty,
             "What this installer does",
             [
-                f"Merge managed SessionStart hooks into {codex_home / 'hooks.json'}",
-                "Ensure the Superpowers plugin and OpenSpec CLI are installed and current",
+                "Merge managed SessionStart hooks into a repo's .codex/hooks.json",
+                "Materialize Superpowers skills into .agents/skills; keep the "
+                "OpenSpec CLI current",
                 "Preserve every hook it does not manage",
             ],
         )
@@ -1181,6 +1141,22 @@ def main() -> int:
         print(f"{PROJECT} {VERSION}")
 
     try:
+        repo_root, git_rooted = resolve_repo_root(args.repo, tty, args.yes)
+        if tty is not None:
+            note(
+                tty,
+                "Target",
+                [
+                    f"Install SessionStart hooks and skills into {repo_root}",
+                    "Nothing is written to ~/.codex/hooks.json",
+                ],
+            )
+            if not confirm(tty, f"Install into {repo_root}?", True):
+                cancel(tty, "Aborted.")
+                return 0
+        else:
+            print(f"target repo: {repo_root}")
+
         prefs = load_prefs(codex_home)
         if tty is not None and "auto_update" not in prefs:
             prefs["auto_update"] = confirm(
@@ -1233,17 +1209,21 @@ def main() -> int:
 
         if not skip_updates:
             if "superpowers" in hooks:
-                with Spinner("Ensuring the latest Superpowers plugin", tty):
-                    update_superpowers()
+                with Spinner("Materializing Superpowers skills", tty):
+                    materialize_superpowers(repo_root, args.superpowers_ref)
             if "openspec" in hooks:
                 with Spinner("Ensuring the latest OpenSpec CLI", tty):
                     update_openspec(args.openspec_package_manager)
 
         with Spinner("Enabling Codex hooks and merging hook definitions", tty):
             enable_codex_hooks(codex_home)
-            path = codex_home / "hooks.json"
+            if "superpowers" in args.remove:
+                remove_superpowers(repo_root)
+            install_hook_scripts(repo_root, hooks)
+            remove_hook_scripts(repo_root, args.remove)
+            path = repo_root / ".codex" / "hooks.json"
             current = load_hooks(path)
-            updated = merge_hooks(current, script_dir, hooks, args.remove)
+            updated = merge_hooks(current, repo_root, hooks, args.remove, git_rooted)
         if current == updated:
             print(f"Hooks already current: {path}")
         else:
@@ -1252,24 +1232,38 @@ def main() -> int:
             if backup:
                 print(f"Backup: {backup}")
 
+        if not _flag_passed("--remove"):
+            keep_local = tty is None or confirm(
+                tty, "Keep generated files local (add .gitignore entries)?", True
+            )
+            if keep_local:
+                ensure_gitignore(repo_root)
+            else:
+                strip_gitignore(repo_root)
+
         init_target = args.openspec_init
+        if init_target == Path("."):
+            init_target = repo_root
         if (
             init_target is None
             and tty is not None
             and "openspec" in hooks
             and not _flag_passed("--openspec-init")
         ):
-            cwd = Path.cwd()
-            if cwd != home and not (cwd / "openspec" / "config.yaml").is_file():
-                if confirm(tty, f"Initialize OpenSpec for Codex in {cwd}?", False):
-                    init_target = cwd
+            if not (repo_root / "openspec" / "config.yaml").is_file():
+                if confirm(
+                    tty, f"Initialize OpenSpec for Codex in {repo_root}?", False
+                ):
+                    init_target = repo_root
         if init_target is not None:
             with Spinner(f"Initializing OpenSpec in {init_target}", tty):
                 init_openspec_project(init_target)
 
+        cleanup_global_hooks(codex_home, tty, args.yes)
+
         message = (
-            "Done — open a new Codex session, run /hooks, "
-            "and trust each changed hook definition."
+            f"Done — open a Codex session in {repo_root}, trust the project, "
+            "run /hooks, and approve each hook definition."
         )
         if tty is not None:
             outro(tty, message)

@@ -25,20 +25,6 @@ superpowers = load_module("superpowers_bootstrap", "superpowers-bootstrap.py")
 
 
 class InstallerTests(unittest.TestCase):
-    def test_discovers_superpowers_only_from_official_marketplace(self):
-        data = {
-            "installed": [
-                {"name": "superpowers", "pluginId": "superpowers@third-party"},
-                {
-                    "name": "superpowers",
-                    "pluginId": "superpowers@openai-curated-remote",
-                    "marketplaceName": "openai-curated-remote",
-                },
-            ]
-        }
-        entry = installer._official_superpowers_entry(data)
-        self.assertEqual(entry["pluginId"], "superpowers@openai-curated-remote")
-
     def test_unrelated_similarly_named_hook_is_preserved(self):
         unrelated = {
             "type": "command",

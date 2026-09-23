@@ -4,23 +4,22 @@
 # Two modes:
 #   * From a repository checkout: runs install.py in place.
 #   * Standalone (e.g. piped through curl): downloads the repository into a
-#     persistent directory first, then runs install.py from there. Hook
-#     definitions point at that directory, so it must not be temporary.
+#     temporary directory and runs install.py from there. Everything the
+#     installer writes lands inside the target repository — the download is
+#     transient because hook commands resolve via `git rev-parse`.
 #
-# Usage:
+# Usage (run from inside the repo to install into):
 #   curl -fsSL https://raw.githubusercontent.com/IGUNUBLUE/codex-session-hooks/main/install.sh | bash
 #   curl -fsSL ... | bash -s -- --hooks openspec --skip-framework-updates
+#   ./install.sh --repo /path/to/repo
 #
 # Environment overrides:
-#   CODEX_HOOKS_HOME        install directory for standalone mode
-#                           (default: ${XDG_DATA_HOME:-~/.local/share}/codex-session-hooks)
-#   CODEX_HOOKS_REF         git ref to download (default: main; e.g. v1.0.0)
+#   CODEX_HOOKS_REF         git ref to download (default: main; e.g. v2.0.0)
 #   CODEX_HOOKS_SOURCE_URL  full tarball URL override
 set -euo pipefail
 
 REPO="IGUNUBLUE/codex-session-hooks"
 REF="${CODEX_HOOKS_REF:-main}"
-INSTALL_DIR="${CODEX_HOOKS_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/codex-session-hooks}"
 SOURCE_URL="${CODEX_HOOKS_SOURCE_URL:-https://github.com/${REPO}/archive/${REF}.tar.gz}"
 
 REQUIRED_FILES=(install.py superpowers-bootstrap.py openspec-context.py)
@@ -53,12 +52,6 @@ if [ -n "$script_dir" ] && have_repo_files "$script_dir"; then
     src_dir="$script_dir"
 else
     command -v tar >/dev/null 2>&1 || { echo "error: tar is required" >&2; exit 1; }
-    case "$INSTALL_DIR" in
-        ""|"/"|"$HOME")
-            echo "error: unsafe CODEX_HOOKS_HOME: '$INSTALL_DIR'" >&2
-            exit 1
-            ;;
-    esac
 
     tmp_dir="$(mktemp -d)"
     trap 'rm -rf "$tmp_dir"' EXIT
@@ -70,12 +63,7 @@ else
         echo "error: downloaded archive is missing installer files" >&2
         exit 1
     fi
-
-    mkdir -p "$(dirname "$INSTALL_DIR")"
-    rm -rf "$INSTALL_DIR"
-    mv "$tmp_dir/extract" "$INSTALL_DIR"
-    src_dir="$INSTALL_DIR"
-    echo "Installed source to $src_dir"
+    src_dir="$tmp_dir/extract"
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
