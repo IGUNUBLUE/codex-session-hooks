@@ -529,6 +529,22 @@ class OpenSpecTests(unittest.TestCase):
         self.assertIn("openspec CLI was not found", missing)
         self.assertNotIn("openspec CLI was not found", present)
 
+    def test_opsx_commands_are_discovered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".omp" / "commands").mkdir(parents=True)
+            (root / ".opencode" / "commands").mkdir(parents=True)
+            (root / ".omp" / "commands" / "opsx-propose.md").write_text("x")
+            (root / ".opencode" / "commands" / "opsx-apply.md").write_text("x")
+            (root / ".omp" / "commands" / "unrelated.md").write_text("x")
+
+            names = openspec.find_command_names(root)
+            rendered = openspec.render_context(root, [], command_names=names)
+
+            self.assertEqual(names, ["opsx-apply", "opsx-propose"])
+            self.assertIn("/opsx-apply", rendered)
+            self.assertNotIn("unrelated", rendered)
+
 
 class SuperpowersTests(unittest.TestCase):
     def test_repo_skill_found_via_script_ancestors(self):
