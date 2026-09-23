@@ -677,25 +677,96 @@ def managed_hook_id(handler: object) -> str | None:
     return None
 
 
-def hook_handler(script_dir: Path, hook_id: str) -> dict[str, object]:
+def hook_handler(
+    repo_root: Path, hook_id: str, git_rooted: bool = True
+) -> dict[str, object]:
     definition = HOOK_DEFINITIONS[hook_id]
-    script = (script_dir / str(definition["script"])).resolve()
-    args = [sys.executable, str(script), MARKER]
+    script_rel = f".codex/hooks/{definition['script']}"
+    script_abs = (repo_root / script_rel).resolve()
+    if git_rooted:
+        command = (
+            f"{shlex.quote(sys.executable)} "
+            f'"$(git rev-parse --show-toplevel)/{script_rel}" {MARKER}'
+        )
+    else:
+        command = shlex.join([sys.executable, str(script_abs), MARKER])
     return {
         "type": "command",
-        "command": shlex.join(args),
-        "commandWindows": subprocess.list2cmdline(args),
+        "command": command,
+        "commandWindows": subprocess.list2cmdline(
+            [sys.executable, str(script_abs), MARKER]
+        ),
         "statusMessage": definition["status"],
         "timeout": 15,
         "additionalContextLimit": 2500,
     }
 
 
+def prompt_text(tty, question: str) -> str:
+    tty.write(f"{_bar()} {question}: ")
+    tty.flush()
+    line = tty.readline()
+    if not line:
+        raise InstallError("input closed")
+    return line.strip()
+
+
+def resolve_repo_root(
+    repo_arg: Path | None, tty, yes: bool
+) -> tuple[Path, bool]:
+    if repo_arg is not None:
+        root = repo_arg.expanduser().resolve()
+        if not root.is_dir():
+            raise InstallError(f"--repo target is not a directory: {root}")
+    else:
+        probe = (
+            _probe_output(["git", "rev-parse", "--show-toplevel"])
+            if shutil.which("git")
+            else None
+        )
+        if probe:
+            return Path(probe.strip()).resolve(), True
+        if tty is not None and not yes:
+            entered = prompt_text(tty, "Repository directory to install into")
+            if not entered:
+                raise InstallError("no repository given")
+            root = Path(entered).expanduser().resolve()
+            if not root.is_dir():
+                raise InstallError(f"not a directory: {root}")
+        else:
+            raise InstallError(
+                "not inside a git repository; rerun inside one or pass --repo DIR"
+            )
+    inside = _probe_output(["git", "-C", str(root), "rev-parse", "--show-toplevel"])
+    git_rooted = bool(inside) and Path(inside.strip()).resolve() == root
+    return root, git_rooted
+
+
+def install_hook_scripts(repo_root: Path, hook_ids: set[str]) -> None:
+    dest_dir = repo_root / ".codex" / "hooks"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    source_dir = Path(__file__).resolve().parent
+    for hook_id in hook_ids:
+        shutil.copy2(
+            source_dir / HOOK_DEFINITIONS[hook_id]["script"],
+            dest_dir / HOOK_DEFINITIONS[hook_id]["script"],
+        )
+    remove_hook_scripts(repo_root, set(HOOK_DEFINITIONS) - set(hook_ids))
+
+
+def remove_hook_scripts(repo_root: Path, remove_ids: set[str]) -> None:
+    for hook_id in remove_ids:
+        stale = repo_root / ".codex" / "hooks" / HOOK_DEFINITIONS[hook_id]["script"]
+        if stale.is_file():
+            stale.unlink()
+
+
 def merge_hooks(
     data: dict[str, object],
-    script_dir: Path,
+    repo_root: Path,
     install_ids: set[str],
     remove_ids: set[str] | None = None,
+    git_rooted: bool = True,
 ) -> dict[str, object]:
     result = deepcopy(data)
     hooks = result.setdefault("hooks", {})
@@ -725,7 +796,7 @@ def merge_hooks(
         retained_groups.append(
             {
                 "matcher": "^(startup|clear|compact)$",
-                "hooks": [hook_handler(script_dir, hook_id)],
+                "hooks": [hook_handler(repo_root, hook_id, git_rooted)],
             }
         )
     hooks["SessionStart"] = retained_groups
