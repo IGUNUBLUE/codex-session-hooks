@@ -4,9 +4,11 @@
 
 ## Release
 
-- Latest release: **v2.0.0** (published) — repo-scoped install. Breaking
-  change from 1.x: nothing is written to `~/.codex/hooks.json` anymore.
-- In development: **v2.1.0** — multi-harness (`--harness codex,opencode,omp`).
+- Latest release: **v2.1.0** (published) — multi-harness
+  (`--harness codex,opencode,omp`), shared handlers under
+  `.agents/session-hooks/`, native TS adapters for OpenCode and oh-my-pi.
+- v2.0.0 was the repo-scoped break: nothing is written to
+  `~/.codex/hooks.json` anymore.
 - Public repo: https://github.com/IGUNUBLUE/codex-session-hooks
 - Dev clone: `~/Projects/codex-session-hooks` (location-independent).
 - No persistent runtime dir since v2: piped `install.sh` downloads to a
