@@ -591,13 +591,18 @@ GITIGNORE_BEGIN = "# >>> codex-session-hooks >>>"
 GITIGNORE_END = "# <<< codex-session-hooks <<<"
 
 
-def gitignore_entries(repo_root: Path) -> list[str]:
+def gitignore_entries(repo_root: Path, harnesses: set[str] | None = None) -> list[str]:
+    selected = {"codex"} if harnesses is None else harnesses
     entries = [
-        "/.codex/hooks.json",
-        "/.codex/hooks/",
+        "/.agents/session-hooks/",
         "/.agents/skills/openspec-*/",
         f"/.agents/skills/{MANIFEST_NAME}",
     ]
+    if "codex" in selected:
+        entries.insert(0, "/.codex/hooks.json")
+    for harness in ("opencode", "omp"):
+        if harness in selected:
+            entries.append("/" + str(HARNESSES[harness]["adapter_rel"]))
     manifest = load_manifest(repo_root)
     entries += [
         f"/.agents/skills/{name}/"
@@ -637,10 +642,10 @@ def _replace_gitignore_block(text: str, entries: list[str] | None) -> str:
     return "".join(out)
 
 
-def ensure_gitignore(repo_root: Path) -> bool:
+def ensure_gitignore(repo_root: Path, harnesses: set[str] | None = None) -> bool:
     path = repo_root / ".gitignore"
     old = path.read_text(encoding="utf-8") if path.exists() else ""
-    new = _replace_gitignore_block(old, gitignore_entries(repo_root))
+    new = _replace_gitignore_block(old, gitignore_entries(repo_root, harnesses))
     if new == old:
         return False
     path.write_text(new, encoding="utf-8")
@@ -769,8 +774,16 @@ def update_openspec(manager: str = "auto") -> str:
     return version
 
 
-def init_openspec_project(path: Path) -> None:
-    """Initialize (or refresh) OpenSpec for Codex inside a single project.
+def openspec_tools(harnesses: set[str]) -> str:
+    return ",".join(
+        str(HARNESSES[harness]["openspec_tool"])
+        for harness in HARNESSES
+        if harness in harnesses
+    )
+
+
+def init_openspec_project(path: Path, tools: str = "codex") -> None:
+    """Initialize (or refresh) OpenSpec inside a single project.
 
     Deliberately explicit per project: `openspec init` writes files into the
     working tree, so it must never run implicitly at session time.
@@ -783,10 +796,10 @@ def init_openspec_project(path: Path) -> None:
         run_command([openspec, "update", "--force"], cwd=target, timeout=120)
         print(f"Refreshed OpenSpec integration in {target}")
         return
-    run_command([openspec, "init", "--tools", "codex"], cwd=target, timeout=120)
+    run_command([openspec, "init", "--tools", tools], cwd=target, timeout=120)
     if not (target / "openspec" / "config.yaml").is_file():
         raise InstallError(f"openspec init did not create {target}/openspec/config.yaml")
-    print(f"Initialized OpenSpec for Codex in {target}")
+    print(f"Initialized OpenSpec ({tools}) in {target}")
 
 
 def _command_tokens(command: object) -> list[str]:
@@ -1040,6 +1053,46 @@ def remove_managed_adapter(path: Path) -> bool:
     return True
 
 
+def apply_harnesses(
+    repo_root: Path,
+    harnesses: set[str],
+    hook_ids: set[str],
+    remove_ids: set[str],
+    git_rooted: bool,
+    codex_home: Path,
+) -> None:
+    migrate_legacy_hook_dir(repo_root)
+    install_hook_scripts(repo_root, hook_ids)
+    remove_hook_scripts(repo_root, remove_ids)
+
+    writers = {"opencode": write_opencode_adapter, "omp": write_omp_adapter}
+    for harness, writer in writers.items():
+        path = repo_root / str(HARNESSES[harness]["adapter_rel"])
+        if harness in harnesses and hook_ids:
+            writer(repo_root, hook_ids)
+        else:
+            remove_managed_adapter(path)
+
+    hooks_path = repo_root / ".codex" / "hooks.json"
+    if "codex" in harnesses:
+        enable_codex_hooks(codex_home)
+        install_ids, drop_ids = hook_ids, remove_ids
+    elif hooks_path.is_file():
+        # codex deselected: strip managed definitions, keep foreign ones
+        install_ids, drop_ids = set(), set(HOOK_DEFINITIONS)
+    else:
+        return
+    current = load_hooks(hooks_path)
+    updated = merge_hooks(current, repo_root, install_ids, drop_ids, git_rooted)
+    if current == updated:
+        print(f"Hooks already current: {hooks_path}")
+        return
+    backup = write_hooks_atomic(hooks_path, updated)
+    print(f"Updated hooks: {hooks_path}")
+    if backup:
+        print(f"Backup: {backup}")
+
+
 def merge_hooks(
     data: dict[str, object],
     repo_root: Path,
@@ -1234,6 +1287,13 @@ def main() -> int:
         help="managed hooks to remove without affecting unrelated hooks",
     )
     parser.add_argument(
+        "--harness",
+        type=parse_harness_ids,
+        default=None,
+        help="harnesses to install for: codex, opencode, omp, all, or none "
+        "(default: harnesses detected in PATH; prompted interactively)",
+    )
+    parser.add_argument(
         "-y",
         "--yes",
         action="store_true",
@@ -1373,6 +1433,34 @@ def main() -> int:
                 f"cannot install and remove the same hook: {', '.join(sorted(overlap))}"
             )
 
+        harnesses = args.harness
+        if harnesses is None:
+            detected = detect_harnesses()
+            if tty is not None and not _flag_passed("--remove"):
+                options = [
+                    ("codex", "codex", "OpenAI Codex CLI (.codex/hooks.json)"),
+                    ("opencode", "opencode", "OpenCode (.opencode/plugins/)"),
+                    ("omp", "omp", "oh-my-pi (.omp/extensions/)"),
+                ]
+                preselected = [
+                    index
+                    for index, (harness, _, _) in enumerate(options)
+                    if harness in detected
+                ]
+                harnesses = multiselect(
+                    tty, "Harnesses to install for", options, preselected
+                )
+            else:
+                harnesses = detected or {"codex"}
+        else:
+            for harness in sorted(harnesses):
+                cli = str(HARNESSES[harness]["cli"])
+                if not shutil.which(cli):
+                    print(
+                        f"warning: {harness} selected but `{cli}` is not in PATH",
+                        file=sys.stderr,
+                    )
+
         skip_updates = args.skip_framework_updates
         if not skip_updates and tty is not None and hooks:
             skip_updates = not confirm(
@@ -1387,29 +1475,19 @@ def main() -> int:
                 with Spinner("Ensuring the latest OpenSpec CLI", tty):
                     update_openspec(args.openspec_package_manager)
 
-        with Spinner("Enabling Codex hooks and merging hook definitions", tty):
-            enable_codex_hooks(codex_home)
+        with Spinner("Installing session hooks", tty):
             if "superpowers" in args.remove:
                 remove_superpowers(repo_root)
-            install_hook_scripts(repo_root, hooks)
-            remove_hook_scripts(repo_root, args.remove)
-            path = repo_root / ".codex" / "hooks.json"
-            current = load_hooks(path)
-            updated = merge_hooks(current, repo_root, hooks, args.remove, git_rooted)
-        if current == updated:
-            print(f"Hooks already current: {path}")
-        else:
-            backup = write_hooks_atomic(path, updated)
-            print(f"Updated hooks: {path}")
-            if backup:
-                print(f"Backup: {backup}")
+            apply_harnesses(
+                repo_root, harnesses, hooks, args.remove, git_rooted, codex_home
+            )
 
         if not _flag_passed("--remove"):
             keep_local = tty is None or confirm(
                 tty, "Keep generated files local (add .gitignore entries)?", True
             )
             if keep_local:
-                ensure_gitignore(repo_root)
+                ensure_gitignore(repo_root, harnesses)
             else:
                 strip_gitignore(repo_root)
 
@@ -1424,19 +1502,23 @@ def main() -> int:
         ):
             if not (repo_root / "openspec" / "config.yaml").is_file():
                 if confirm(
-                    tty, f"Initialize OpenSpec for Codex in {repo_root}?", False
+                    tty,
+                    f"Initialize OpenSpec ({openspec_tools(harnesses)}) in {repo_root}?",
+                    False,
                 ):
                     init_target = repo_root
         if init_target is not None:
             with Spinner(f"Initializing OpenSpec in {init_target}", tty):
-                init_openspec_project(init_target)
+                init_openspec_project(init_target, openspec_tools(harnesses))
 
         cleanup_global_hooks(codex_home, tty, args.yes)
 
-        message = (
-            f"Done — open a Codex session in {repo_root}, trust the project, "
-            "run /hooks, and approve each hook definition."
-        )
+        message = f"Done — session hooks installed for {', '.join(sorted(harnesses))} in {repo_root}."
+        if "codex" in harnesses:
+            message += (
+                " Open a Codex session there, trust the project, "
+                "run /hooks, and approve each hook definition."
+            )
         if tty is not None:
             outro(tty, message)
         else:
