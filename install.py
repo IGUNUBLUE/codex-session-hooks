@@ -7,9 +7,10 @@ import argparse
 import contextlib
 from copy import deepcopy
 from datetime import datetime, timezone
+import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import select
 import shlex
@@ -25,7 +26,9 @@ import urllib.request
 PROJECT = "codex-session-hooks"
 VERSION = "1.5.3"  # released version; bump before tagging
 REPO = "IGUNUBLUE/codex-session-hooks"
+SUPERPOWERS_REPO = "obra/superpowers"
 PREFS_FILE = "codex-session-hooks.json"
+MANIFEST_NAME = ".codex-session-hooks.json"
 MARKER = f"--managed-by={PROJECT}"
 HOOK_DEFINITIONS = {
     "superpowers": {
@@ -391,8 +394,8 @@ def _flag_passed(name: str) -> bool:
     return any(arg == name or arg.startswith(f"{name}=") for arg in sys.argv[1:])
 
 
-def latest_release_tag(timeout: int = 8) -> str | None:
-    url = f"https://api.github.com/repos/{REPO}/releases/latest"
+def latest_release_tag(repo: str = REPO, timeout: int = 8) -> str | None:
+    url = f"https://api.github.com/repos/{repo}/releases/latest"
     request = urllib.request.Request(url, headers={"User-Agent": PROJECT})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -458,6 +461,113 @@ def self_update(script_dir: Path, tag: str) -> None:
                 entry.unlink()
         for entry in roots[0].iterdir():
             shutil.move(str(entry), script_dir / entry.name)
+
+
+def skills_dir(repo_root: Path) -> Path:
+    return repo_root / ".agents" / "skills"
+
+
+def load_manifest(repo_root: Path) -> dict:
+    path = skills_dir(repo_root) / MANIFEST_NAME
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_manifest(repo_root: Path, data: dict) -> None:
+    path = skills_dir(repo_root) / MANIFEST_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _download(url: str, timeout: int = 120) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": PROJECT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def _extract_skills(payload: bytes, staging: Path) -> list[str]:
+    """Extract <top>/skills/<name>/** members into staging/<name>; returns names."""
+    names: set[str] = set()
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            parts = PurePosixPath(member.name).parts
+            if len(parts) < 3 or parts[1] != "skills" or ".." in parts:
+                continue
+            if not (member.isfile() or member.isdir()):
+                continue  # skip links/devices: nothing escapes staging
+            rel = Path(*parts[2:])  # <name>/...
+            target = staging / rel
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            extracted = tar.extractfile(member)
+            if extracted is not None:
+                with extracted as src:
+                    target.write_bytes(src.read())
+            names.add(parts[2])
+    return sorted(names)
+
+
+def materialize_superpowers(repo_root: Path, ref: str | None = None) -> str:
+    ref = ref or latest_release_tag(SUPERPOWERS_REPO)
+    if not ref:
+        raise InstallError(
+            f"could not resolve latest {SUPERPOWERS_REPO} release; "
+            "pass --superpowers-ref"
+        )
+    url = f"https://github.com/{SUPERPOWERS_REPO}/archive/{ref}.tar.gz"
+    try:
+        payload = _download(url)
+    except (OSError, ValueError) as error:
+        raise InstallError(f"failed to download {url}: {error}") from error
+
+    dest = skills_dir(repo_root)
+    with tempfile.TemporaryDirectory() as tmp:
+        staging = Path(tmp)
+        names = _extract_skills(payload, staging)
+        if not (staging / "using-superpowers" / "SKILL.md").is_file():
+            raise InstallError(
+                f"{ref} tarball did not contain using-superpowers/SKILL.md"
+            )
+        dest.mkdir(parents=True, exist_ok=True)
+        for name in names:  # adopts pre-existing same-name dirs (same upstream skill)
+            target = dest / name
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(staging / name, target)
+
+    previous = set(load_manifest(repo_root).get("superpowers", {}).get("skills", []))
+    for stale in previous - set(names):
+        target = dest / stale
+        if target.is_dir():
+            shutil.rmtree(target)
+    manifest = load_manifest(repo_root)
+    manifest["managed-by"] = PROJECT
+    manifest["superpowers"] = {"ref": ref, "skills": names}
+    save_manifest(repo_root, manifest)
+    print(f"Superpowers {ref} materialized into {dest} ({len(names)} skills).")
+    return ref
+
+
+def remove_superpowers(repo_root: Path) -> bool:
+    manifest = load_manifest(repo_root)
+    removed = False
+    for name in manifest.get("superpowers", {}).get("skills", []):
+        target = skills_dir(repo_root) / name
+        if target.is_dir():
+            shutil.rmtree(target)
+            removed = True
+    manifest_path = skills_dir(repo_root) / MANIFEST_NAME
+    if manifest_path.is_file():
+        manifest_path.unlink()
+        removed = True
+    return removed
 
 
 def _plugin_listing(codex: str, include_available: bool = False) -> dict[str, object]:
