@@ -570,6 +570,78 @@ def remove_superpowers(repo_root: Path) -> bool:
     return removed
 
 
+GITIGNORE_BEGIN = "# >>> codex-session-hooks >>>"
+GITIGNORE_END = "# <<< codex-session-hooks <<<"
+
+
+def gitignore_entries(repo_root: Path) -> list[str]:
+    entries = [
+        "/.codex/hooks.json",
+        "/.codex/hooks/",
+        "/.agents/skills/openspec-*/",
+        f"/.agents/skills/{MANIFEST_NAME}",
+    ]
+    manifest = load_manifest(repo_root)
+    entries += [
+        f"/.agents/skills/{name}/"
+        for name in manifest.get("superpowers", {}).get("skills", [])
+    ]
+    return entries
+
+
+def _replace_gitignore_block(text: str, entries: list[str] | None) -> str:
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    inside = False
+    found = False
+    for line in lines:
+        if line.strip() == GITIGNORE_BEGIN:
+            inside = True
+            found = True
+            if entries:
+                out.append(GITIGNORE_BEGIN + "\n")
+                out.extend(entry + "\n" for entry in entries)
+            continue
+        if inside and line.strip() == GITIGNORE_END:
+            inside = False
+            if entries:
+                out.append(GITIGNORE_END + "\n")
+            continue
+        if not inside:
+            out.append(line)
+    if not found and entries:
+        if out and not out[-1].endswith("\n"):
+            out[-1] += "\n"
+        if out and out[-1].strip():
+            out.append("\n")
+        out.append(GITIGNORE_BEGIN + "\n")
+        out.extend(entry + "\n" for entry in entries)
+        out.append(GITIGNORE_END + "\n")
+    return "".join(out)
+
+
+def ensure_gitignore(repo_root: Path) -> bool:
+    path = repo_root / ".gitignore"
+    old = path.read_text(encoding="utf-8") if path.exists() else ""
+    new = _replace_gitignore_block(old, gitignore_entries(repo_root))
+    if new == old:
+        return False
+    path.write_text(new, encoding="utf-8")
+    return True
+
+
+def strip_gitignore(repo_root: Path) -> bool:
+    path = repo_root / ".gitignore"
+    if not path.exists():
+        return False
+    old = path.read_text(encoding="utf-8")
+    new = _replace_gitignore_block(old, None)
+    if new == old:
+        return False
+    path.write_text(new, encoding="utf-8")
+    return True
+
+
 def _plugin_listing(codex: str, include_available: bool = False) -> dict[str, object]:
     args = [codex, "plugin", "list"]
     if include_available:

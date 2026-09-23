@@ -248,6 +248,33 @@ class MaterializeTests(unittest.TestCase):
             )
 
 
+class GitignoreTests(unittest.TestCase):
+    def test_block_idempotent_and_preserves_user_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+            self.assertTrue(installer.ensure_gitignore(repo))
+            first = (repo / ".gitignore").read_text()
+            self.assertFalse(installer.ensure_gitignore(repo))
+            self.assertEqual(first, (repo / ".gitignore").read_text())
+            self.assertTrue(first.startswith("node_modules/"))
+            self.assertIn("/.codex/hooks.json", first)
+            self.assertIn("/.agents/skills/openspec-*/", first)
+
+    def test_strip_removes_only_our_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            installer.ensure_gitignore(repo)
+            (repo / ".gitignore").write_text(
+                (repo / ".gitignore").read_text() + "dist/\n", encoding="utf-8"
+            )
+            self.assertTrue(installer.strip_gitignore(repo))
+            text = (repo / ".gitignore").read_text()
+            self.assertIn("dist/", text)
+            self.assertNotIn("codex-session-hooks", text)
+            self.assertFalse(installer.strip_gitignore(repo))
+
+
 class GuidedInstallTests(unittest.TestCase):
     def test_ask_parses_yes_no_default_and_retry(self):
         import io
