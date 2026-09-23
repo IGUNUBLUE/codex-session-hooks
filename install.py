@@ -46,6 +46,23 @@ HOOK_DEFINITIONS = {
 }
 LEGACY_REPO_NAMES = {"codex-session-hooks", "codex-superpowers-hook"}
 NODE_MINIMUM = (20, 19, 0)
+HARNESSES: dict[str, dict[str, object]] = {
+    "codex": {
+        "cli": "codex",
+        "adapter_rel": None,
+        "openspec_tool": "codex",
+    },
+    "opencode": {
+        "cli": "opencode",
+        "adapter_rel": ".opencode/plugins/session-hooks.ts",
+        "openspec_tool": "opencode",
+    },
+    "omp": {
+        "cli": "omp",
+        "adapter_rel": ".omp/extensions/session-hooks.ts",
+        "openspec_tool": "oh-my-pi",
+    },
+}
 
 
 class InstallError(RuntimeError):
@@ -1039,6 +1056,27 @@ def parse_hook_ids(value: str) -> set[str]:
         valid = ", ".join([*HOOK_DEFINITIONS, "all", "none"])
         raise argparse.ArgumentTypeError(f"choose a comma-separated subset of: {valid}")
     return values
+
+
+def parse_harness_ids(value: str) -> set[str]:
+    values = {item.strip() for item in value.split(",") if item.strip()}
+    if values == {"all"}:
+        return set(HARNESSES)
+    if values == {"none"}:
+        return set()
+    unknown = values - set(HARNESSES)
+    if not values or unknown:
+        valid = ", ".join([*HARNESSES, "all", "none"])
+        raise argparse.ArgumentTypeError(f"choose a comma-separated subset of: {valid}")
+    return values
+
+
+def detect_harnesses() -> set[str]:
+    return {
+        harness
+        for harness, meta in HARNESSES.items()
+        if shutil.which(str(meta["cli"]))
+    }
 
 
 def main() -> int:

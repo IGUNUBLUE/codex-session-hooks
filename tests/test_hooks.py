@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 from pathlib import Path
@@ -568,6 +569,31 @@ class SuperpowersTests(unittest.TestCase):
             self.assertIn(str(skill), rendered)
             self.assertIn(str(reference), rendered)
             self.assertIn("Use skills.", rendered)
+
+
+class HarnessTests(unittest.TestCase):
+    def test_parse_harness_ids_valid(self):
+        self.assertEqual(
+            installer.parse_harness_ids("codex,omp"), {"codex", "omp"}
+        )
+        self.assertEqual(
+            installer.parse_harness_ids("all"), {"codex", "opencode", "omp"}
+        )
+        self.assertEqual(installer.parse_harness_ids("none"), set())
+
+    def test_parse_harness_ids_invalid(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            installer.parse_harness_ids("codex,bogus")
+        with self.assertRaises(argparse.ArgumentTypeError):
+            installer.parse_harness_ids("")
+
+    def test_detect_harnesses(self):
+        with mock.patch.object(
+            installer.shutil,
+            "which",
+            side_effect=lambda cmd: f"/bin/{cmd}" if cmd == "codex" else None,
+        ):
+            self.assertEqual(installer.detect_harnesses(), {"codex"})
 
 
 if __name__ == "__main__":
