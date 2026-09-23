@@ -91,11 +91,57 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(once, twice)
 
     def test_paths_with_spaces_are_shell_quoted(self):
-        script_dir = Path("/tmp/codex hooks")
-        handler = installer.hook_handler(script_dir, "superpowers")
+        repo_root = Path("/tmp/codex hooks")
+        handler = installer.hook_handler(repo_root, "superpowers", git_rooted=False)
         tokens = shlex.split(handler["command"])
-        self.assertEqual(tokens[1], "/tmp/codex hooks/superpowers-bootstrap.py")
+        self.assertEqual(
+            tokens[1], "/tmp/codex hooks/.codex/hooks/superpowers-bootstrap.py"
+        )
         self.assertEqual(tokens[2], installer.MARKER)
+
+    def test_repo_hook_command_uses_git_root(self):
+        handler = installer.hook_handler(Path("/repo"), "superpowers", git_rooted=True)
+        self.assertIn(
+            '"$(git rev-parse --show-toplevel)/.codex/hooks/', handler["command"]
+        )
+        self.assertIn(installer.MARKER, handler["command"])
+        # $(...) must stay double-quoted — single quotes would kill substitution
+        self.assertNotIn("'", handler["command"].split("git rev-parse")[1])
+
+    def test_non_git_repo_falls_back_to_absolute(self):
+        handler = installer.hook_handler(Path("/repo"), "openspec", git_rooted=False)
+        self.assertIn("/repo/.codex/hooks/openspec-context.py", handler["command"])
+        self.assertNotIn("git rev-parse", handler["command"])
+
+    def test_install_and_remove_hook_scripts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            installer.install_hook_scripts(repo, {"superpowers", "openspec"})
+            hooks_dir = repo / ".codex" / "hooks"
+            self.assertTrue((hooks_dir / "superpowers-bootstrap.py").is_file())
+            self.assertTrue((hooks_dir / "openspec-context.py").is_file())
+            installer.remove_hook_scripts(repo, {"openspec"})
+            self.assertFalse((hooks_dir / "openspec-context.py").exists())
+            self.assertTrue((hooks_dir / "superpowers-bootstrap.py").is_file())
+
+    def test_resolve_repo_root_explicit_and_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            with mock.patch.object(installer, "_probe_output", return_value=None):
+                root, git_rooted = installer.resolve_repo_root(repo, None, True)
+            self.assertEqual(root, repo.resolve())
+            self.assertFalse(git_rooted)
+            with self.assertRaises(installer.InstallError):
+                installer.resolve_repo_root(repo / "missing", None, True)
+
+    def test_resolve_repo_root_detects_git(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            with mock.patch.object(
+                installer, "_probe_output", return_value=str(repo)
+            ):
+                root, git_rooted = installer.resolve_repo_root(repo, None, True)
+            self.assertTrue(git_rooted)
 
     def test_remove_only_deletes_owned_hook(self):
         installed = installer.merge_hooks({"hooks": {}}, ROOT, {"superpowers", "openspec"})
