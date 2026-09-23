@@ -7,75 +7,41 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shutil
-import subprocess
 import sys
 
 MAX_SKILL_CHARS = 8_000
 
 
-def _active_superpowers_entry(codex: str) -> dict[str, object] | None:
-    try:
-        result = subprocess.run(
-            [codex, "plugin", "list", "--json"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        data = json.loads(result.stdout)
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-        return None
-
-    for entry in data.get("installed", []):
-        if (
-            entry.get("name") == "superpowers"
-            and entry.get("installed") is True
-            and entry.get("enabled") is True
-        ):
-            return entry
-    return None
+def _ancestors(start: Path):
+    current = start.resolve()
+    yield current
+    yield from current.parents
 
 
 def find_superpowers_skill(
     codex_home: Path | None = None,
     environ: dict[str, str] | None = None,
+    script_dir: Path | None = None,
 ) -> Path | None:
     env = os.environ if environ is None else environ
     home = Path(env.get("HOME", str(Path.home())))
     codex_home = codex_home or Path(env.get("CODEX_HOME", home / ".codex"))
+    script_dir = script_dir or Path(__file__).resolve().parent
 
     override = env.get("SUPERPOWERS_USING_SKILL")
     if override:
         candidate = Path(override).expanduser()
         return candidate if candidate.is_file() else None
 
-    codex = shutil.which("codex", path=env.get("PATH"))
-    if codex:
-        entry = _active_superpowers_entry(codex)
-        if entry:
-            marketplace = entry.get("marketplaceName")
-            version = entry.get("version")
-            if isinstance(marketplace, str) and isinstance(version, str):
-                candidate = (
-                    codex_home
-                    / "plugins"
-                    / "cache"
-                    / marketplace
-                    / "superpowers"
-                    / version
-                    / "skills"
-                    / "using-superpowers"
-                    / "SKILL.md"
-                )
-                if candidate.is_file():
-                    return candidate
-
-    manual_candidates = (
+    candidates = [
+        ancestor / ".agents" / "skills" / "using-superpowers" / "SKILL.md"
+        for ancestor in _ancestors(script_dir)
+    ]
+    candidates += [
         home / ".agents" / "skills" / "using-superpowers" / "SKILL.md",
         codex_home / "skills" / "using-superpowers" / "SKILL.md",
-    )
-    return next((candidate for candidate in manual_candidates if candidate.is_file()), None)
+    ]
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
 def render_bootstrap(skill_path: Path) -> str:
