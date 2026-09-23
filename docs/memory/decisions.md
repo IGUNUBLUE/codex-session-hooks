@@ -148,3 +148,36 @@ custom piece; discovery stays native.
 and skills; teams can commit them. First `SessionStart` in a repo is skipped
 until `/hooks` approval (openai/codex#35306) and worktrees don't load
 project hooks (openai/codex#27133) — documented, not worked around.
+
+## 0011 — Multi-harness: shared Python handlers + thin native TS adapters
+
+**Date:** 2026-09-23 (v2.1.0)
+**Context:** User asked for OpenCode v2 and oh-my-pi coverage using official
+mechanisms. Research found the equivalents: OpenCode auto-discovers
+`.opencode/plugins/*.ts` and exposes `ctx.session.hook("context")` with
+`event.system.push`; oh-my-pi auto-discovers `.omp/extensions/*.ts` and
+exposes a `context` event that may return a modified message list. Both
+discover `.agents/skills` natively, so materialized Superpowers skills need
+no extra work. OpenSpec supports `--tools opencode` and `--tools oh-my-pi`.
+**Decision:**
+- `--harness codex,opencode,omp` (`all`/`none`); default = detected CLIs.
+  `--hooks` picks contexts, `--harness` picks destinations — full matrix.
+- Handlers move to `.agents/session-hooks/` — one source of logic; every
+  adapter just spawns them and caches stdout per session.
+- OpenCode adapter is a plain `export default {id, setup}` object. The
+  documented `import { Plugin } from "@opencode/plugin"` fails to resolve
+  in auto-discovered project plugins (verified on v2.0.15) — plain objects
+  ride the v1/v2 bridge.
+- omp adapter injects a deduplicated `custom` message inside `pi.on(
+  "context")` — idempotent across resume/branch/compact; lazy-cached so it
+  works regardless of `session_start` ordering.
+- Adapter files are never gitignored: omp's extension-module discovery uses
+  a gitignore-aware glob (verified live — an ignored adapter is invisible);
+  its skill discovery ignores `.gitignore`, so materialized skills may stay
+  ignored.
+- OpenSpec init maps harnesses to tool names (`omp` → `oh-my-pi`) and runs
+  once with the joined list.
+**Consequences:** v2.1.0 minor — `--harness codex` behaves like v2.0 modulo
+the script path move (definition change → Codex re-trust needed, as with any
+moved path). Zero-adapter global state; adapters are regenerated/deleted as
+units. `openspec-context.py` now reports `opsx-*` commands too.
