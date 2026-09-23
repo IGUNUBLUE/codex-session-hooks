@@ -275,6 +275,54 @@ class GitignoreTests(unittest.TestCase):
             self.assertFalse(installer.strip_gitignore(repo))
 
 
+class GlobalCleanupTests(unittest.TestCase):
+    def _global_hooks(self, codex_home):
+        path = codex_home / "hooks.json"
+        data = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {"type": "command", "command": "bash /x/herdr.sh session"}
+                        ]
+                    },
+                    {
+                        "matcher": "^x$",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": f"python3 /y/openspec-context.py {installer.MARKER}",
+                                "statusMessage": "Loading OpenSpec context",
+                            }
+                        ],
+                    },
+                ]
+            }
+        }
+        path.write_text(json.dumps(data))
+        return path
+
+    def test_detects_and_removes_only_managed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            path = self._global_hooks(codex_home)
+            self.assertEqual(
+                installer.find_global_managed(codex_home), {"openspec"}
+            )
+            self.assertTrue(installer.cleanup_global_hooks(codex_home, None, True))
+            data = json.loads(path.read_text())
+            remaining = data["hooks"]["SessionStart"]
+            self.assertEqual(len(remaining), 1)
+            self.assertIn("herdr", remaining[0]["hooks"][0]["command"])
+            self.assertTrue(list(codex_home.glob("hooks.json.bak.*")))
+
+    def test_noop_when_absent_or_foreign_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            self.assertEqual(installer.find_global_managed(codex_home), set())
+            self.assertFalse(installer.cleanup_global_hooks(codex_home, None, True))
+
+
 class GuidedInstallTests(unittest.TestCase):
     def test_ask_parses_yes_no_default_and_retry(self):
         import io
