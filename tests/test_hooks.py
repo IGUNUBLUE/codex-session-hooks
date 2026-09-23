@@ -82,14 +82,16 @@ class InstallerTests(unittest.TestCase):
         handler = installer.hook_handler(repo_root, "superpowers", git_rooted=False)
         tokens = shlex.split(handler["command"])
         self.assertEqual(
-            tokens[1], "/tmp/codex hooks/.codex/hooks/superpowers-bootstrap.py"
+            tokens[1],
+            "/tmp/codex hooks/.agents/session-hooks/superpowers-bootstrap.py",
         )
         self.assertEqual(tokens[2], installer.MARKER)
 
     def test_repo_hook_command_uses_git_root(self):
         handler = installer.hook_handler(Path("/repo"), "superpowers", git_rooted=True)
         self.assertIn(
-            '"$(git rev-parse --show-toplevel)/.codex/hooks/', handler["command"]
+            '"$(git rev-parse --show-toplevel)/.agents/session-hooks/',
+            handler["command"],
         )
         self.assertIn(installer.MARKER, handler["command"])
         # $(...) must stay double-quoted — single quotes would kill substitution
@@ -97,19 +99,41 @@ class InstallerTests(unittest.TestCase):
 
     def test_non_git_repo_falls_back_to_absolute(self):
         handler = installer.hook_handler(Path("/repo"), "openspec", git_rooted=False)
-        self.assertIn("/repo/.codex/hooks/openspec-context.py", handler["command"])
+        self.assertIn(
+            "/repo/.agents/session-hooks/openspec-context.py", handler["command"]
+        )
         self.assertNotIn("git rev-parse", handler["command"])
 
     def test_install_and_remove_hook_scripts(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             installer.install_hook_scripts(repo, {"superpowers", "openspec"})
-            hooks_dir = repo / ".codex" / "hooks"
+            hooks_dir = repo / ".agents" / "session-hooks"
             self.assertTrue((hooks_dir / "superpowers-bootstrap.py").is_file())
             self.assertTrue((hooks_dir / "openspec-context.py").is_file())
             installer.remove_hook_scripts(repo, {"openspec"})
             self.assertFalse((hooks_dir / "openspec-context.py").exists())
             self.assertTrue((hooks_dir / "superpowers-bootstrap.py").is_file())
+
+    def test_migrate_legacy_hook_dir(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            legacy = repo / ".codex" / "hooks"
+            legacy.mkdir(parents=True)
+            (legacy / "superpowers-bootstrap.py").write_text("managed")
+            (legacy / "openspec-context.py").write_text("managed")
+            foreign = legacy / "other.py"
+            foreign.write_text("foreign")
+
+            installer.migrate_legacy_hook_dir(repo)
+            self.assertFalse((legacy / "superpowers-bootstrap.py").exists())
+            self.assertFalse((legacy / "openspec-context.py").exists())
+            self.assertTrue(foreign.is_file())
+            self.assertTrue(legacy.is_dir())
+
+            foreign.unlink()
+            installer.migrate_legacy_hook_dir(repo)
+            self.assertFalse(legacy.exists())
 
     def test_resolve_repo_root_explicit_and_errors(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -510,7 +534,7 @@ class SuperpowersTests(unittest.TestCase):
     def test_repo_skill_found_via_script_ancestors(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
-            hooks_dir = repo / ".codex" / "hooks"
+            hooks_dir = repo / ".agents" / "session-hooks"
             skills = repo / ".agents" / "skills" / "using-superpowers"
             hooks_dir.mkdir(parents=True)
             skills.mkdir(parents=True)

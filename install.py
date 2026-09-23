@@ -826,7 +826,7 @@ def hook_handler(
     repo_root: Path, hook_id: str, git_rooted: bool = True
 ) -> dict[str, object]:
     definition = HOOK_DEFINITIONS[hook_id]
-    script_rel = f".codex/hooks/{definition['script']}"
+    script_rel = f".agents/session-hooks/{definition['script']}"
     script_abs = (repo_root / script_rel).resolve()
     if git_rooted:
         command = (
@@ -887,9 +887,14 @@ def resolve_repo_root(
     return root, git_rooted
 
 
+def session_hooks_dir(repo_root: Path) -> Path:
+    return repo_root / ".agents" / "session-hooks"
+
+
 def install_hook_scripts(repo_root: Path, hook_ids: set[str]) -> None:
-    dest_dir = repo_root / ".codex" / "hooks"
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_dir = session_hooks_dir(repo_root)
+    if hook_ids:
+        dest_dir.mkdir(parents=True, exist_ok=True)
     source_dir = Path(__file__).resolve().parent
     for hook_id in hook_ids:
         shutil.copy2(
@@ -900,10 +905,23 @@ def install_hook_scripts(repo_root: Path, hook_ids: set[str]) -> None:
 
 
 def remove_hook_scripts(repo_root: Path, remove_ids: set[str]) -> None:
+    dest_dir = session_hooks_dir(repo_root)
     for hook_id in remove_ids:
-        stale = repo_root / ".codex" / "hooks" / HOOK_DEFINITIONS[hook_id]["script"]
+        stale = dest_dir / HOOK_DEFINITIONS[hook_id]["script"]
         if stale.is_file():
             stale.unlink()
+    if dest_dir.is_dir() and not any(dest_dir.iterdir()):
+        dest_dir.rmdir()
+
+
+def migrate_legacy_hook_dir(repo_root: Path) -> None:
+    legacy = repo_root / ".codex" / "hooks"
+    for definition in HOOK_DEFINITIONS.values():
+        stale = legacy / definition["script"]
+        if stale.is_file():
+            stale.unlink()
+    if legacy.is_dir() and not any(legacy.iterdir()):
+        legacy.rmdir()
 
 
 def merge_hooks(
