@@ -1033,6 +1033,47 @@ def load_hooks(path: Path) -> dict[str, object]:
     return data
 
 
+def find_global_managed(codex_home: Path) -> set[str]:
+    path = codex_home / "hooks.json"
+    if not path.exists():
+        return set()
+    try:
+        data = load_hooks(path)
+    except InstallError:
+        return set()
+    found: set[str] = set()
+    for group in data.get("hooks", {}).get("SessionStart", []):
+        if not isinstance(group, dict):
+            continue
+        for handler in group.get("hooks", []):
+            hook_id = managed_hook_id(handler)
+            if hook_id:
+                found.add(hook_id)
+    return found
+
+
+def cleanup_global_hooks(codex_home: Path, tty, yes: bool) -> bool:
+    found = find_global_managed(codex_home)
+    if not found:
+        return False
+    path = codex_home / "hooks.json"
+    if not yes:
+        if tty is None:
+            print(f"note: managed hooks remain in {path} (rerun with -y to remove)")
+            return False
+        if not confirm(tty, f"Remove managed hooks from {path}?", True):
+            return False
+    data = load_hooks(path)
+    updated = merge_hooks(data, Path("/"), set(), found)
+    if updated != data:
+        backup = write_hooks_atomic(path, updated)
+        print(
+            f"Removed managed hooks from {path}"
+            + (f" (backup: {backup})" if backup else "")
+        )
+    return True
+
+
 def enable_codex_hooks(codex_home: Path) -> None:
     codex = require_command("codex")
     codex_home.mkdir(parents=True, exist_ok=True)
