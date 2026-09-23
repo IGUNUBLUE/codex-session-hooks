@@ -167,6 +167,87 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), data)
 
 
+class MaterializeTests(unittest.TestCase):
+    def _tarball(self, members):
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for name, data in members.items():
+                info = tarfile.TarInfo(name)
+                payload = data.encode()
+                info.size = len(payload)
+                tar.addfile(info, io.BytesIO(payload))
+        return buf.getvalue()
+
+    def test_materialize_extracts_skills_and_writes_manifest(self):
+        payload = self._tarball(
+            {
+                "superpowers-1/skills/using-superpowers/SKILL.md": "bootstrap",
+                "superpowers-1/skills/brainstorming/SKILL.md": "brainstorm",
+                "superpowers-1/README.md": "ignored",
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            with mock.patch.object(installer, "_download", return_value=payload):
+                ref = installer.materialize_superpowers(repo, ref="v1.0.0")
+            self.assertEqual(ref, "v1.0.0")
+            skill = repo / ".agents/skills/using-superpowers/SKILL.md"
+            self.assertEqual(skill.read_text(), "bootstrap")
+            self.assertFalse((repo / ".agents/skills/README.md").exists())
+            manifest = installer.load_manifest(repo)
+            self.assertEqual(manifest["superpowers"]["ref"], "v1.0.0")
+            self.assertIn("brainstorming", manifest["superpowers"]["skills"])
+
+    def test_rejects_path_traversal(self):
+        payload = self._tarball(
+            {
+                "superpowers-1/skills/using-superpowers/SKILL.md": "ok",
+                "superpowers-1/skills/../../evil.txt": "nope",
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            with mock.patch.object(installer, "_download", return_value=payload):
+                installer.materialize_superpowers(repo, ref="v1.0.0")
+            self.assertFalse((repo / "evil.txt").exists())
+            self.assertFalse((repo / ".agents/evil.txt").exists())
+
+    def test_missing_using_superpowers_fails(self):
+        payload = self._tarball({"superpowers-1/skills/other/SKILL.md": "x"})
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(installer, "_download", return_value=payload):
+                with self.assertRaises(installer.InstallError):
+                    installer.materialize_superpowers(Path(directory), ref="v1.0.0")
+
+    def test_update_removes_stale_and_adopts_preexisting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            first = self._tarball(
+                {
+                    "sp/skills/using-superpowers/SKILL.md": "a",
+                    "sp/skills/old-skill/SKILL.md": "old",
+                }
+            )
+            second = self._tarball({"sp/skills/using-superpowers/SKILL.md": "b"})
+            with mock.patch.object(installer, "_download", return_value=first):
+                installer.materialize_superpowers(repo, ref="v1")
+            self.assertTrue((repo / ".agents/skills/old-skill").is_dir())
+            with mock.patch.object(installer, "_download", return_value=second):
+                installer.materialize_superpowers(repo, ref="v2")
+            self.assertFalse((repo / ".agents/skills/old-skill").exists())
+            self.assertEqual(
+                (repo / ".agents/skills/using-superpowers/SKILL.md").read_text(), "b"
+            )
+            self.assertTrue(installer.remove_superpowers(repo))
+            self.assertFalse((repo / ".agents/skills/using-superpowers").exists())
+            self.assertFalse(
+                (repo / ".agents/skills/.codex-session-hooks.json").exists()
+            )
+
+
 class GuidedInstallTests(unittest.TestCase):
     def test_ask_parses_yes_no_default_and_retry(self):
         import io
