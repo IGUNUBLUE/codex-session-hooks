@@ -318,54 +318,54 @@ class OpenSpecTests(unittest.TestCase):
 
 
 class SuperpowersTests(unittest.TestCase):
-    def test_uses_exact_active_marketplace_version_not_path_sorting(self):
+    def test_repo_skill_found_via_script_ancestors(self):
         with tempfile.TemporaryDirectory() as directory:
-            codex_home = Path(directory)
-            active = (
-                codex_home
-                / "plugins/cache/a-source/superpowers/9.0.0"
-                / "skills/using-superpowers/SKILL.md"
+            repo = Path(directory)
+            hooks_dir = repo / ".codex" / "hooks"
+            skills = repo / ".agents" / "skills" / "using-superpowers"
+            hooks_dir.mkdir(parents=True)
+            skills.mkdir(parents=True)
+            (skills / "SKILL.md").write_text("repo skill")
+            (hooks_dir / "superpowers-bootstrap.py").write_text("")
+
+            found = superpowers.find_superpowers_skill(
+                codex_home=repo / "nope",
+                environ={"HOME": str(repo / "home"), "PATH": "/usr/bin"},
+                script_dir=hooks_dir,
             )
-            stale = (
-                codex_home
-                / "plugins/cache/z-source/superpowers/99.0.0"
-                / "skills/using-superpowers/SKILL.md"
-            )
-            active.parent.mkdir(parents=True)
-            stale.parent.mkdir(parents=True)
-            active.write_text("active")
-            stale.write_text("stale")
+            self.assertEqual(found, skills / "SKILL.md")
 
-            with mock.patch.object(superpowers.shutil, "which", return_value="/usr/bin/codex"), mock.patch.object(
-                superpowers,
-                "_active_superpowers_entry",
-                return_value={"marketplaceName": "a-source", "version": "9.0.0"},
-            ):
-                found = superpowers.find_superpowers_skill(
-                    codex_home, {"HOME": directory, "PATH": "/usr/bin"}
-                )
-
-            self.assertEqual(found, active)
-
-    def test_disabled_cached_plugin_is_not_loaded(self):
+    def test_env_override_and_missing(self):
         with tempfile.TemporaryDirectory() as directory:
-            codex_home = Path(directory)
-            stale = (
-                codex_home
-                / "plugins/cache/source/superpowers/99.0.0"
-                / "skills/using-superpowers/SKILL.md"
+            root = Path(directory)
+            override = root / "custom" / "SKILL.md"
+            override.parent.mkdir(parents=True)
+            override.write_text("x")
+            env = {
+                "HOME": str(root / "home"),
+                "PATH": "/usr/bin",
+                "SUPERPOWERS_USING_SKILL": str(override),
+            }
+            self.assertEqual(
+                superpowers.find_superpowers_skill(root / "ch", env, root), override
             )
-            stale.parent.mkdir(parents=True)
-            stale.write_text("stale")
+            env2 = {"HOME": str(root / "home"), "PATH": "/usr/bin"}
+            self.assertIsNone(
+                superpowers.find_superpowers_skill(root / "ch", env2, root)
+            )
 
-            with mock.patch.object(superpowers.shutil, "which", return_value="/usr/bin/codex"), mock.patch.object(
-                superpowers, "_active_superpowers_entry", return_value=None
-            ):
-                found = superpowers.find_superpowers_skill(
-                    codex_home, {"HOME": directory, "PATH": "/usr/bin"}
-                )
-
-            self.assertIsNone(found)
+    def test_user_scope_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            user = root / "home" / ".agents" / "skills" / "using-superpowers"
+            user.mkdir(parents=True)
+            (user / "SKILL.md").write_text("user skill")
+            found = superpowers.find_superpowers_skill(
+                root / "ch",
+                {"HOME": str(root / "home"), "PATH": "/usr/bin"},
+                root / "elsewhere",
+            )
+            self.assertEqual(found, user / "SKILL.md")
 
     def test_render_includes_source_and_codex_reference(self):
         with tempfile.TemporaryDirectory() as directory:
