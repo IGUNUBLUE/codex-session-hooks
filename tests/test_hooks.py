@@ -619,6 +619,49 @@ class HarnessTests(unittest.TestCase):
         ):
             self.assertEqual(installer.detect_harnesses(), {"codex"})
 
+    def test_opencode_adapter_written(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = installer.write_opencode_adapter(
+                repo, {"superpowers", "openspec"}
+            )
+            self.assertEqual(
+                path, repo / ".opencode/plugins/session-hooks.ts"
+            )
+            text = path.read_text()
+            self.assertIn("// managed-by: codex-session-hooks", text)
+            self.assertIn("superpowers-bootstrap.py", text)
+            self.assertIn("openspec-context.py", text)
+            self.assertIn('hook("context"', text)
+            self.assertIn("event.system.push", text)
+
+    def test_opencode_adapter_subset_and_removal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = installer.write_opencode_adapter(repo, {"openspec"})
+            text = path.read_text()
+            self.assertIn("openspec-context.py", text)
+            self.assertNotIn("superpowers-bootstrap.py", text)
+            foreign = path.with_name("other.ts")
+            foreign.write_text("export {}")
+            self.assertTrue(installer.remove_managed_adapter(path))
+            self.assertFalse(path.exists())
+            self.assertTrue(foreign.exists())
+            self.assertFalse(installer.remove_managed_adapter(foreign))
+            self.assertTrue(foreign.exists())
+
+    def test_omp_adapter_written(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = installer.write_omp_adapter(repo, {"superpowers"})
+            self.assertEqual(path, repo / ".omp/extensions/session-hooks.ts")
+            text = path.read_text()
+            self.assertIn("// managed-by: codex-session-hooks", text)
+            self.assertIn("superpowers-bootstrap.py", text)
+            self.assertNotIn("openspec-context.py", text)
+            self.assertIn('pi.on("context"', text)
+            self.assertIn("customType", text)
+
 
 if __name__ == "__main__":
     unittest.main()

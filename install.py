@@ -924,6 +924,122 @@ def migrate_legacy_hook_dir(repo_root: Path) -> None:
         legacy.rmdir()
 
 
+MARKER_TS = "// managed-by: codex-session-hooks"
+
+OPENCODE_ADAPTER_TEMPLATE = """{marker}
+import {{ Plugin }} from "@opencode/plugin"
+import {{ spawnSync }} from "node:child_process"
+
+const SCRIPTS = {scripts}
+
+function runHandlers(dir: string): string[] {{
+  const out: string[] = []
+  for (const name of SCRIPTS) {{
+    try {{
+      const res = spawnSync(
+        "python3",
+        [`${{dir}}/.agents/session-hooks/${{name}}`, "--managed-by=codex-session-hooks"],
+        {{ cwd: dir, encoding: "utf8", timeout: 15000 }},
+      )
+      const text = (res.stdout ?? "").trim()
+      if (res.status === 0 && text) out.push(text)
+    }} catch {{}}
+  }}
+  return out
+}}
+
+export default Plugin.define({{
+  id: "codex-session-hooks",
+  async setup(ctx) {{
+    const contexts = runHandlers(ctx.location.directory)
+    if (!contexts.length) return
+    await ctx.session.hook("context", (event) => {{
+      for (const text of contexts) event.system.push({{ type: "text", text }})
+    }})
+  }},
+}})
+"""
+
+OMP_ADAPTER_TEMPLATE = """{marker}
+import type {{ ExtensionAPI }} from "@oh-my-pi/pi-coding-agent";
+import {{ spawnSync }} from "node:child_process";
+
+const SCRIPTS = {scripts};
+const CUSTOM_TYPE = "codex-session-hooks-context";
+let cached: string[] | null = null;
+
+function loadContexts(cwd: string): string[] {{
+  const out: string[] = [];
+  for (const name of SCRIPTS) {{
+    try {{
+      const res = spawnSync(
+        "python3",
+        [`${{cwd}}/.agents/session-hooks/${{name}}`, "--managed-by=codex-session-hooks"],
+        {{ cwd, encoding: "utf8", timeout: 15000 }},
+      );
+      const text = (res.stdout ?? "").trim();
+      if (res.status === 0 && text) out.push(text);
+    }} catch {{}}
+  }}
+  return out;
+}}
+
+export default function (pi: ExtensionAPI) {{
+  pi.on("context", async (event, ctx) => {{
+    if (cached === null) cached = loadContexts(ctx.cwd);
+    if (!cached.length) return;
+    const present = event.messages.some(
+      (m: any) => m.role === "custom" && m.customType === CUSTOM_TYPE,
+    );
+    if (present) return;
+    return {{
+      messages: [
+        {{
+          role: "custom",
+          customType: CUSTOM_TYPE,
+          content: [{{ type: "text", text: cached.join("\\n\\n") }}],
+          display: false,
+        }},
+        ...event.messages,
+      ],
+    }};
+  }});
+}}
+"""
+
+
+def _adapter_scripts(hook_ids: set[str]) -> str:
+    names = sorted(HOOK_DEFINITIONS[hook_id]["script"] for hook_id in hook_ids)
+    return "[" + ", ".join(json.dumps(name) for name in names) + "]"
+
+
+def _write_adapter(repo_root: Path, harness: str, template: str, hook_ids: set[str]) -> Path:
+    path = repo_root / str(HARNESSES[harness]["adapter_rel"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        template.format(marker=MARKER_TS, scripts=_adapter_scripts(hook_ids)),
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_opencode_adapter(repo_root: Path, hook_ids: set[str]) -> Path:
+    return _write_adapter(repo_root, "opencode", OPENCODE_ADAPTER_TEMPLATE, hook_ids)
+
+
+def write_omp_adapter(repo_root: Path, hook_ids: set[str]) -> Path:
+    return _write_adapter(repo_root, "omp", OMP_ADAPTER_TEMPLATE, hook_ids)
+
+
+def remove_managed_adapter(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    if MARKER_TS not in path.read_text(encoding="utf-8", errors="replace"):
+        return False
+    path.unlink()
+    return True
+
+
 def merge_hooks(
     data: dict[str, object],
     repo_root: Path,
