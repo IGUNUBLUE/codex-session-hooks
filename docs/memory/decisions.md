@@ -113,3 +113,38 @@ the clone repoints hooks at the clone — that is "dev mode", and moving the
 clone again requires re-running it.
 **Consequences:** Users get set-and-forget hooks; developers opt into
 path-fragility knowingly.
+
+## 0010 — Repo-scoped installs; Superpowers via upstream tarball into `.agents/skills`
+
+**Date:** 2026-09-23 (v2.0.0) — supersedes 0006 and 0009
+**Context:** The user wants nothing installed globally: hooks, scripts, and
+skills must live inside the target repository, and the installer must show
+and confirm the target. Official mechanisms verified against Codex docs:
+project hooks (`<repo>/.codex/hooks.json`, gated by project-layer trust) and
+REPO-scope skills (`<repo>/.agents/skills`, ancestors walked to repo root,
+symlinks followed). There is no official repo-scoped *plugin* install —
+`codex plugin add` is user-global only — so materialization is the one
+custom piece; discovery stays native.
+**Decision:**
+- Target resolution: `--repo DIR` → git root of cwd → TUI path prompt →
+  error. Confirmed before any write.
+- Hook commands use the documented `"$(git rev-parse --show-toplevel)/…"`
+  form (double-quoted so substitution survives); absolute fallback for
+  non-git `--repo` targets.
+- Hook scripts are *copied* into `<repo>/.codex/hooks/` — the repo is
+  self-contained.
+- Superpowers skills materialize from the `obra/superpowers` release tarball
+  (stdlib `urllib`+`tarfile`, sanitized members) into `.agents/skills/`,
+  tracked by `.agents/skills/.codex-session-hooks.json` for clean
+  update/remove. Chosen over git submodule (less ceremony) and symlinks to a
+  shared checkout (would reintroduce a global dependency).
+- `install.sh` piped mode downloads to `mktemp` — transient, no managed dir.
+- Managed entries previously written to `~/.codex/hooks.json` are detected
+  and offered for removal; `[features] hooks=true` in `config.toml` stays —
+  it is a user capability flag, not a repo artifact.
+- Generated files default to local via a managed `.gitignore` block; TUI
+  offers committing them for team sharing.
+**Consequences:** Breaking change → v2.0.0. Each repo carries its own hooks
+and skills; teams can commit them. First `SessionStart` in a repo is skipped
+until `/hooks` approval (openai/codex#35306) and worktrees don't load
+project hooks (openai/codex#27133) — documented, not worked around.

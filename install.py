@@ -24,7 +24,7 @@ import threading
 import urllib.request
 
 PROJECT = "codex-session-hooks"
-VERSION = "1.5.3"  # released version; bump before tagging
+VERSION = "2.0.0"  # released version; bump before tagging
 REPO = "IGUNUBLUE/codex-session-hooks"
 SUPERPOWERS_REPO = "obra/superpowers"
 PREFS_FILE = "codex-session-hooks.json"
