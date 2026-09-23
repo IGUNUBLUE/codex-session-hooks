@@ -3,15 +3,19 @@
 ## Project overview
 
 `codex-session-hooks` installs and manages Codex CLI `SessionStart` hooks that
-inject framework context into every session, plus an installer that keeps the
-upstream frameworks current. It does **not** fork or vendor either framework.
+inject framework context into sessions — **repo-scoped**: hooks land in
+`<repo>/.codex/hooks.json`, scripts in `<repo>/.codex/hooks/`, and Superpowers
+skills are materialized from the upstream `obra/superpowers` release tarball
+into `<repo>/.agents/skills/` (Codex's official REPO-scope discovery). Nothing
+is written to `~/.codex/hooks.json`. It does **not** fork or vendor either
+framework — skills are fetched from upstream at install time, never edited.
 
 Two managed hooks, matched on `^(startup|clear|compact)$` (resume is skipped
 on purpose — the resumed transcript already carries the context):
 
 | Hook | Script | Emits |
 |---|---|---|
-| `superpowers` | `superpowers-bootstrap.py` | The active Superpowers `using-superpowers/SKILL.md`, resolved from `codex plugin list --json` — never from path sorting or disabled caches |
+| `superpowers` | `superpowers-bootstrap.py` | The repo's `.agents/skills/using-superpowers/SKILL.md` (walks ancestors of the script location; falls back to `~/.agents/skills` and `$CODEX_HOME/skills`) |
 | `openspec` | `openspec-context.py` | Nearest ancestor `openspec/config.yaml` context: discovered `openspec-*` skills, CLI-missing warning, and the framework-precedence rule. Silent outside OpenSpec projects |
 
 Everything is stdlib-only Python 3.10+ (`from __future__ import annotations`)
@@ -20,12 +24,17 @@ added — the installer must stay runnable via `curl | bash` on a bare machine.
 
 ## Repository layout
 
-- `install.py` — installer: framework updates, hooks.json merge, guided TUI,
-  self-update. All logic lives here; keep it dependency-free.
+- `install.py` — installer: repo resolution (`--repo` / git root), Superpowers
+  tarball materialization into `.agents/skills` (manifest-tracked), OpenSpec
+  CLI update, `.codex/hooks.json` merge in the target repo, `.gitignore`
+  managed block, global-hooks cleanup, guided TUI, self-update. All logic
+  lives here; keep it dependency-free.
 - `install.sh` — entry point. Dual mode: runs `install.py` in place from a
-  clone, or downloads the repo tarball into a persistent directory when piped.
+  clone, or downloads the repo tarball into a *temporary* directory when piped
+  (hook commands resolve via `git rev-parse`, so no persistent dir is needed).
 - `superpowers-bootstrap.py`, `openspec-context.py` — SessionStart handlers.
-  Must stay fast (hook timeout is 15s) and print nothing when inactive.
+  Copied into `<repo>/.codex/hooks/` at install time. Must stay fast (hook
+  timeout is 15s) and print nothing when inactive.
 - `session-start.sh`, `openspec-detect.sh` — legacy handlers kept only so the
   installer can recognize and migrate old installs (see `legacy_scripts`).
 - `hooks.json` — reference shape only; never edited by hand for real installs.
@@ -35,7 +44,8 @@ added — the installer must stay runnable via `curl | bash` on a bare machine.
 ## Setup and verification
 
 Prerequisites the installer verifies but does not install: Codex CLI,
-Python ≥3.10, Node.js ≥20.19.0, and one JS package manager
+Python ≥3.10, `git` (hook commands resolve via `git rev-parse`), Node.js
+≥20.19.0, and one JS package manager
 (npm → pnpm → bun → Yarn 1 → volta, in preference order for fresh installs;
 an existing Volta-owned OpenSpec stays on Volta).
 
@@ -46,13 +56,15 @@ python3 -m py_compile install.py superpowers-bootstrap.py openspec-context.py
 bash -n install.sh session-start.sh openspec-detect.sh
 python3 -m json.tool hooks.json >/dev/null
 
-# Install / update (from a clone)
+# Install / update — run from inside the target repo (or pass --repo)
 ./install.sh                 # guided TUI when a terminal exists
-./install.sh -y              # non-interactive
+./install.sh -y              # non-interactive, targets the git root of cwd
+./install.sh --repo /path/to/repo
 ./install.sh --hooks openspec --skip-framework-updates
-./install.sh --openspec-init [DIR]   # explicit per-project OpenSpec setup
+./install.sh --superpowers-ref v6.4.1   # pin upstream instead of latest
+./install.sh --openspec-init [DIR]      # explicit per-project OpenSpec setup
 
-# Standalone (managed runtime dir, survives repo moves)
+# Standalone (transient download; installs into the repo at cwd)
 curl -fsSL https://raw.githubusercontent.com/IGUNUBLUE/codex-session-hooks/main/install.sh | bash
 ```
 
@@ -64,14 +76,21 @@ back to line mode, which is what most prompt tests want.
 ## Invariants — do not break
 
 - **Location-independent.** Scripts resolve everything from
-  `Path(__file__).resolve().parent`. No absolute paths may be hardcoded.
+  `Path(__file__).resolve().parent` (hook scripts find the repo's
+  `.agents/skills` by walking ancestors). No absolute paths may be hardcoded.
 - **Ownership by marker.** Managed hooks are identified by the
   `--managed-by=codex-session-hooks` token in the command — never by script
   basename alone. Unrelated hooks must be preserved byte-for-byte.
 - **Atomic writes.** `hooks.json` is replaced via temp-file + `os.replace`
   with a timestamped `.bak` backup. No partial writes.
-- **Absolute paths in hook commands.** SessionStart runs in whatever directory
-  the user opened Codex in — there is no stable base for a relative path.
+- **Git-root hook commands.** Repo hooks use
+  `"$(git rev-parse --show-toplevel)/.codex/hooks/<script>"` — double-quoted,
+  never single-quoted (substitution must survive). `--repo` targets outside a
+  git repo fall back to absolute paths with a warning.
+- **Manifest ownership.** `.agents/skills/.codex-session-hooks.json` lists the
+  Superpowers skill dirs we manage; only those are updated or deleted.
+- **Tarball safety.** `_extract_skills` rejects `..` members and non-file
+  entries; extraction stages to a temp dir before syncing into the repo.
 - **Hooks never write.** SessionStart handlers only print context. They must
   not create files in arbitrary repos — `openspec init` runs only through the
   explicit `--openspec-init` flag, never from a hook.
@@ -110,14 +129,16 @@ Git identity is repo-local per command — do not change global git config.
 
 ## Versioning policy
 
-Strict semver on the 1.x line:
+Strict semver:
 
 - **patch** — fixes and internal/docs changes.
 - **minor** — backward-compatible features (new flags, new prompts, new hooks).
 - **major** — only for breaking changes to the CLI surface or hook behavior.
 
-`v1.0.0` was tagged early; the project stays on 1.x rather than renumbering,
-because every change since has been additive. Do not cut a new major version
+`v2.0.0` broke the line deliberately: installs moved from global
+(`~/.codex/hooks.json`) to repo scope (`<repo>/.codex/hooks.json`), and the
+`codex plugin`-based Superpowers path was replaced by upstream-tarball
+materialization into `.agents/skills/`. Do not cut a new major version
 without an actual incompatibility.
 
 ## Memory system

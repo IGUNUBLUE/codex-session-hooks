@@ -4,7 +4,7 @@ Small, auditable `SessionStart` hooks for [Codex CLI](https://github.com/openai/
 
 | Hook | Behavior |
 |---|---|
-| `superpowers-bootstrap.py` | Loads `using-superpowers/SKILL.md` only from the installed, enabled Superpowers plugin version reported by Codex. |
+| `superpowers-bootstrap.py` | Loads `using-superpowers/SKILL.md` from the repo's `.agents/skills/` (materialized from the upstream `obra/superpowers` release), falling back to user-level skill dirs. |
 | `openspec-context.py` | Finds the nearest ancestor containing `openspec/config.yaml` and advertises only the OpenSpec skills that actually exist. Warns when the `openspec` CLI is not on PATH, and declares the framework precedence rule below. It does not expose repository-controlled change names or impose OpenSpec on unrelated work. |
 
 The legacy shell entry points remain as thin compatibility wrappers, but new installations invoke the Python hooks directly.
@@ -13,7 +13,7 @@ The legacy shell entry points remain as thin compatibility wrappers, but new ins
 
 Codex skills use progressive disclosure: their names and descriptions are initially visible, while Codex loads the full `SKILL.md` only when the skill is selected explicitly or matched implicitly. That is intentional, but an always-on bootstrap such as Superpowers' `using-superpowers` skill benefits from automatic context injection.
 
-Superpowers ships a `SessionStart` hook for other harnesses, while its current Codex plugin manifest declares `"hooks": {}`. This repository adds the missing Codex-side bootstrap without forking Superpowers.
+Superpowers ships a `SessionStart` hook for other harnesses, while its current Codex plugin manifest declares `"hooks": {}`. This repository adds the missing Codex-side bootstrap without forking Superpowers — the installer downloads the upstream release tarball and materializes its `skills/` tree into the repo's `.agents/skills/`, where Codex discovers them natively at REPO scope.
 
 OpenSpec is different: its workflows are designed for explicit skill invocation. The OpenSpec hook therefore stays informational and conditional. It detects the nearest initialized OpenSpec project, discovers the exact generated skill names (including current `.agents/skills` and legacy `.codex/skills` locations), and tells Codex to follow the selected skill rather than assuming a fixed artifact layout.
 
@@ -30,26 +30,30 @@ Two upstream design choices make this composition safe:
 - Every generated OpenSpec skill carries an auto-selected escape hatch: if it was triggered without an explicit OpenSpec request, it instructs the agent to answer normally rather than imposing the spec workflow.
 - Superpowers' own bootstrap declares that user instructions (`AGENTS.md`, direct requests) take precedence over skills — so repository rules can still override this default ordering.
 
-The repository manages the whole stack, not just the text layer: the installer guarantees the Superpowers plugin (installed and enabled via the official marketplace) and the OpenSpec CLI (latest registry version through the owning package manager), and the hook verifies the CLI is on PATH at session time. Nothing in either upstream framework is modified — the composition is added purely through developer context, and the model interprets and combines both skill sets organically.
+The repository manages the whole stack, not just the text layer: the installer materializes the Superpowers skills into the repo (pinned upstream release, manifest-tracked) and keeps the OpenSpec CLI current (latest registry version through the owning package manager), and the hook verifies the CLI is on PATH at session time. Nothing in either upstream framework is modified — the composition is added purely through developer context, and the model interprets and combines both skill sets organically.
 
 ## Prerequisites
 
 The installer verifies these and fails with a clear error if they are missing — it does not install them:
 
-- A recent Codex CLI exposing `codex plugin` and lifecycle hooks.
+- A recent Codex CLI with lifecycle hooks support (`codex features enable hooks`).
 - Python 3.10 or newer.
+- `git` — repo hook commands resolve via `git rev-parse --show-toplevel`.
 - For OpenSpec: Node.js 20.19.0 or newer and one supported global package manager (`npm`, `pnpm`, `bun`, Yarn 1, or `volta`).
 - `bash` is optional and used only by the Unix convenience wrappers. Native Windows users can run `python install.py`.
 
 ## Install
 
-One line, no clone required:
+Everything installs **into a repository** — hooks land in `<repo>/.codex/hooks.json`, hook scripts in `<repo>/.codex/hooks/`, and Superpowers skills in `<repo>/.agents/skills/`. Nothing is written to `~/.codex/hooks.json`.
+
+Run it from inside the repo you want to equip, no clone required:
 
 ```bash
+cd your-project
 curl -fsSL https://raw.githubusercontent.com/IGUNUBLUE/codex-session-hooks/main/install.sh | bash
 ```
 
-The standalone installer downloads the repository into `${XDG_DATA_HOME:-~/.local/share}/codex-session-hooks` and configures the hooks to run from that stable path. Re-running the same command upgrades to the latest `main`. Because the hook command definitions keep pointing at the same paths, no `/hooks` re-approval is needed after an upgrade — but review repository changes before pulling them.
+The standalone installer downloads this repository to a temporary directory and runs it against your current repo — the download is transient because hook commands resolve their scripts via `git rev-parse --show-toplevel`. The installer always shows the resolved target and asks before writing.
 
 Useful variations:
 
@@ -57,40 +61,42 @@ Useful variations:
 # Forward installer flags through bash -s --
 curl -fsSL .../install.sh | bash -s -- --hooks openspec
 
-# Pin a release tag instead of tracking main
-curl -fsSL .../install.sh | env CODEX_HOOKS_REF=v1.0.0 bash
+# Pin an installer release tag instead of tracking main
+curl -fsSL .../install.sh | env CODEX_HOOKS_REF=v2.0.0 bash
 
-# Change where the repository is installed
-curl -fsSL .../install.sh | env CODEX_HOOKS_HOME=/opt/codex-session-hooks bash
+# Explicit target repo (also the only option for non-git directories)
+./install.sh --repo /path/to/repo
 ```
 
 As with any piped installer, review `install.sh` before running it.
 
-From a checkout (works the same as before):
+From a checkout:
 
 ```bash
 git clone https://github.com/IGUNUBLUE/codex-session-hooks
-cd codex-session-hooks
-./install.sh
+cd your-project
+/path/to/codex-session-hooks/install.sh        # resolves the git root of the cwd
 ```
 
 On Windows:
 
 ```powershell
-python install.py
+python install.py --repo C:\path\to\repo
 ```
 
 By default, the installer:
 
-1. Discovers Superpowers in the official Codex marketplace, runs the idempotent `codex plugin add <discovered-plugin-id>` command, and verifies that it is installed and enabled. The version is the latest release resolved by that marketplace at install time.
-2. Detects the package manager that owns an existing OpenSpec installation (including Volta) and updates it in place; for a fresh install it uses the first available of `npm`, `pnpm`, `bun`, Yarn 1, or `volta`. Installs `@fission-ai/openspec@latest`, queries the registry, and verifies that `openspec --version` matches it.
-3. Enables Codex hooks through `codex features enable hooks`.
-4. Atomically merges both handler definitions into `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`). Existing unrelated hooks are preserved exactly. Changed files receive a unique timestamped backup.
-5. Migrates only hook entries previously owned by this project; similarly named third-party hooks are never matched by basename alone.
+1. Resolves the target repo (`--repo`, else the git root of the cwd) and asks for confirmation.
+2. Downloads the pinned `obra/superpowers` release tarball and materializes its `skills/` tree into `<repo>/.agents/skills/` — Codex's official REPO-scope discovery. A manifest (`.agents/skills/.codex-session-hooks.json`) records the ref and managed skill dirs so updates and removal stay clean.
+3. Detects the package manager that owns an existing OpenSpec installation (including Volta) and updates it in place; for a fresh install it uses the first available of `npm`, `pnpm`, `bun`, Yarn 1, or `volta`. Installs `@fission-ai/openspec@latest`, queries the registry, and verifies that `openspec --version` matches it.
+4. Enables Codex hooks through `codex features enable hooks` (user-level capability flag — the only thing still written outside the repo).
+5. Copies the hook scripts into `<repo>/.codex/hooks/` and atomically merges both handler definitions into `<repo>/.codex/hooks.json`. Existing unrelated hooks are preserved exactly. Changed files receive a unique timestamped backup.
+6. Offers to keep generated files local via a managed `.gitignore` block (the default) — or leave them commit-able for the whole team.
+7. Detects hooks this project previously installed in `~/.codex/hooks.json` and offers to remove them; similarly named third-party hooks are never matched by basename alone.
 
 ### Guided mode
 
-When a terminal is available, the installer runs an interactive TUI: a plan panel explains what it will do before anything runs, steps animate with a spinner during long operations, and every decision is a prompt — an arrow-key multiselect for the hooks (`↑/↓` move, `space` toggles, `a` toggles all, `enter` confirms) and single-keypress `y`/`n` confirms for the rest (whether to update frameworks, whether to initialize OpenSpec in the current project). Ctrl+C aborts cleanly.
+When a terminal is available, the installer runs an interactive TUI: a plan panel explains what it will do before anything runs, the resolved target repo is shown and confirmed, steps animate with a spinner during long operations, and every decision is a prompt — an arrow-key multiselect for the hooks (`↑/↓` move, `space` toggles, `a` toggles all, `enter` confirms) and single-keypress `y`/`n` confirms for the rest (whether to update frameworks, whether generated files stay local via `.gitignore`, whether to initialize OpenSpec in the repo, whether to remove previously installed global hooks). Ctrl+C aborts cleanly.
 
 Prompts read `/dev/tty`, so they still work when the script is piped through `curl | bash`; environments without a controlling terminal fall back to plain line input. Colors honor `NO_COLOR` and `TERM=dumb`.
 
@@ -101,25 +107,28 @@ Prompts read `/dev/tty`, so they still work when the script is piped through `cu
 
 Each run compares the embedded version against the latest GitHub release. When a newer one exists, the installer offers to update itself — `git pull --ff-only` for checkouts, re-downloading the release tarball for standalone installs — and re-executes so the new code continues the run. The first run asks whether to do this automatically on future runs; the answer is stored in `$CODEX_HOME/codex-session-hooks.json`.
 
-After installation, start a new Codex session, run `/hooks`, review the changed definitions, and trust them. Codex intentionally skips untrusted user hooks. Trust covers the command definition, not future changes to the target script, so review repository updates before pulling them.
+After installation, open Codex in that repo, trust the project `.codex/` layer, run `/hooks`, review the changed definitions, and trust them. Codex intentionally skips untrusted project hooks — note the first `SessionStart` in a freshly trusted repo fires before approval, so it is skipped once; later sessions get the context normally. Project hooks are also ignored inside git worktrees (upstream limitation). Trust covers the command definition, not future changes to the target script, so review repository updates before pulling them.
 
 ### Select handlers
 
 ```bash
-# Install/update only Superpowers
+# Install/update only Superpowers in this repo
 ./install.sh --hooks superpowers
 
-# Install/update only OpenSpec
+# Install/update only OpenSpec in this repo
 ./install.sh --hooks openspec
 
 # Configure hooks without updating either framework
 ./install.sh --skip-framework-updates
 
-# Remove only this project's OpenSpec hook
+# Remove only this project's OpenSpec hook from the repo
 ./install.sh --hooks none --remove openspec --skip-framework-updates
 
-# Remove all hooks owned by this project
+# Remove all hooks owned by this project from the repo
 ./install.sh --hooks none --remove all --skip-framework-updates
+
+# Pin a specific upstream Superpowers ref instead of the latest release
+./install.sh --superpowers-ref v6.4.1
 ```
 
 Auto-detection respects the manager that owns an existing installation. To force a specific one — for example `volta` on a machine that also has npm — override it:
@@ -132,13 +141,9 @@ Auto-detection respects the manager that owns an existing installation. To force
 
 ### Superpowers
 
-The installer uses the official Codex marketplace automatically. For manual installation, open `/plugins` inside Codex, search for `superpowers`, and select **Install Plugin**. Automation can discover the current official marketplace selector with `codex plugin list --available --json` and pass its `pluginId` to `codex plugin add`.
+The installer downloads the latest `obra/superpowers` release tarball and copies its `skills/` tree into `<repo>/.agents/skills/`, where Codex discovers them natively at REPO scope (symlinks also work, but copies keep the repo self-contained). The manifest records the resolved ref; re-running the installer syncs skills to the newest release and prunes ones that disappeared upstream. `--superpowers-ref <tag-or-sha>` pins a specific version.
 
-Inspect the authoritative installed/enabled state with:
-
-```bash
-codex plugin list --json
-```
+To update: re-run the installer. To remove: `--hooks none --remove superpowers` deletes the hook, the copied script, and the manifest-listed skill dirs — skills it never managed are untouched.
 
 Upstream: <https://github.com/obra/superpowers>
 
@@ -146,10 +151,10 @@ Upstream: <https://github.com/obra/superpowers>
 
 The installer updates the global CLI. OpenSpec also needs a per-project step: `openspec init` writes files into the working tree (`openspec/`, `.agents/skills/`), so it must be an explicit, consented action per repository — never something a session hook does implicitly.
 
-Run it from the project you want to enable:
+Run it against the repo you want to enable:
 
 ```bash
-# Initialize the current directory for Codex skill delivery
+# Initialize the target repo for Codex skill delivery
 ./install.sh --openspec-init
 
 # Or point at another project; refreshes the integration if already initialized
@@ -185,22 +190,23 @@ The generated definitions use:
   "matcher": "^(startup|clear|compact)$",
   "hooks": [{
     "type": "command",
-    "command": "<quoted Python executable> <quoted hook path> --managed-by=codex-session-hooks",
-    "commandWindows": "<Windows equivalent>",
+    "command": "<quoted Python executable> \"$(git rev-parse --show-toplevel)/.codex/hooks/<script>\" --managed-by=codex-session-hooks",
+    "commandWindows": "<Windows equivalent with absolute path>",
     "timeout": 15,
     "additionalContextLimit": 2500
   }]
 }
 ```
 
-The ownership marker allows safe idempotent upgrades and removal. Paths are shell-quoted, so cloning into a directory containing spaces is supported.
+The ownership marker allows safe idempotent upgrades and removal. Commands resolve from the git root so they keep working when Codex starts in a subdirectory; for `--repo` targets outside a git repo, an absolute-path command is written instead.
 
 ## Security model
 
 - Hook output is instructions, not deterministic enforcement; model behavior can still vary.
 - The OpenSpec hook never inserts change-directory names or artifact contents into developer context. Skill names must match `openspec-[a-z0-9-]+`.
-- The Superpowers hook consults `codex plugin list --json` and loads the exact active marketplace version. Disabled or stale cached copies are ignored.
+- The Superpowers hook loads `using-superpowers/SKILL.md` from the repo's `.agents/skills/` (walking ancestors of the script location), falling back to `~/.agents/skills/` and `$CODEX_HOME/skills/`; `SUPERPOWERS_USING_SKILL` overrides everything.
 - Both hooks cap their context and the Superpowers loader rejects unexpectedly large bootstrap files.
+- Tarball extraction sanitizes member paths and skips non-file members — nothing escapes `.agents/skills/`.
 - Hooks execute local scripts with your account's permissions. Review this repository before installation and before pulling updates.
 
 ## Verify
@@ -212,12 +218,12 @@ bash -n install.sh session-start.sh openspec-detect.sh
 python3 -m json.tool hooks.json >/dev/null
 ```
 
-Runtime checks:
+Runtime checks (from an installed repo):
 
 ```bash
-python3 superpowers-bootstrap.py
-cd /path/to/nested/open-spec/project/subdirectory
-python3 /path/to/codex-session-hooks/openspec-context.py
+cd your-project
+python3 "$(git rev-parse --show-toplevel)/.codex/hooks/superpowers-bootstrap.py"
+python3 "$(git rev-parse --show-toplevel)/.codex/hooks/openspec-context.py"
 ```
 
 The OpenSpec command should print nothing outside an initialized project.
