@@ -948,6 +948,6 @@ Verify:
 - `.gitignore` managed block present.
 - `bash -c 'cd /tmp/repo-hooks-test && python3 "$(git rev-parse --show-toplevel)/.codex/hooks/superpowers-bootstrap.py" --managed-by=codex-session-hooks'` prints `<superpowers-bootstrap>…`.
 - openspec-context script prints nothing in non-openspec repo; run `--openspec-init /tmp/repo-hooks-test` then re-run script → prints `<openspec-context>`.
-- Global cleanup: confirm managed entries gone from `~/.codex/hooks.json`, `other-tool` entry intact.
+- Global cleanup: confirm managed entries gone from `~/.codex/hooks.json`, foreign entries intact.
 
 - [ ] **Step 4: Commit** — `docs: repo-scoped install (v2.0.0)`.

@@ -181,3 +181,18 @@ no extra work. OpenSpec supports `--tools opencode` and `--tools oh-my-pi`.
 the script path move (definition change → Codex re-trust needed, as with any
 moved path). Zero-adapter global state; adapters are regenerated/deleted as
 units. `openspec-context.py` now reports `opsx-*` commands too.
+
+## 0012 — No personal machine data in tracked files
+
+**Date:** 2026-09-27
+**Context:** The repo is public and had leaked maintainer details: a real
+`/home/<user>/...` path in a plan doc, a per-machine tool inventory (Volta
+path, foreign hook names, `~/.codex` contents) in `current-state.md`, and a
+personal name in the git-identity examples.
+**Decision:** Scrubbed all of it and added an AGENTS.md invariant: tracked
+files use `~/`/placeholders only, version notes read "verified against",
+test fixtures use generic names, and git attribution is the `IGUNUBLUE`
+GitHub identity (+ noreply email) — never a personal name.
+**Consequences:** Docs describe the project, not the maintainer's machine.
+Committed history still contains the old strings; rewriting public history
+was rejected as not worth the breakage.

@@ -1,6 +1,6 @@
 # Current state of codex-session-hooks
 
-> Last review: 2026-09-23.
+> Last review: 2026-09-27.
 
 ## Release
 
@@ -10,22 +10,22 @@
 - v2.0.0 was the repo-scoped break: nothing is written to
   `~/.codex/hooks.json` anymore.
 - Public repo: https://github.com/IGUNUBLUE/codex-session-hooks
-- Dev clone: `<new clone>` (location-independent).
+- Location-independent: checkout path never matters — everything resolves via
+  `git rev-parse` / `__file__` ancestors.
 - No persistent runtime dir since v2: piped `install.sh` downloads to a
   temp dir and installs into the repo resolved from the caller's cwd.
 - Re-running the installer in a repo updates hooks + skills in place.
 
-## Installed framework versions (this machine)
+## Verified versions
 
 - Superpowers skills materialized per-repo from `obra/superpowers` release
   tarballs into `<repo>/.agents/skills/` (manifest-tracked); tested v6.4.1.
-- OpenSpec CLI `1.13.2` — `@fission-ai/openspec`, Volta-managed
-  (`~/.local/bin/openspec`). Global tool, per-project init.
-- Harness CLIs installed: Codex (hooks enabled globally via
-  `[features] hooks=true` in `~/.codex/config.toml`), OpenCode `v2.0.15`,
-  oh-my-pi `omp/18.1.21`.
-- `~/.codex/hooks.json` contains only the unrelated `other-tool` hook; the v1
-  managed-runtime dir `~/.local/share/codex-session-hooks/` was deleted.
+- OpenSpec CLI `1.13.2` — `@fission-ai/openspec`. Global tool, per-project init.
+- Harness CLIs verified: Codex (requires `[features] hooks=true` in
+  `~/.codex/config.toml`), OpenCode `v2.0.15`, oh-my-pi `omp/18.1.21`.
+- v1 leftovers: the installer strips managed entries from
+  `~/.codex/hooks.json` (foreign hooks untouched); the old managed-runtime
+  dir `~/.local/share/codex-session-hooks/` is obsolete.
 
 ## Architecture
 
@@ -69,9 +69,9 @@
   per-project opt-in.
 - Full stack requires per-repo `./install.sh` (hooks + superpowers skills)
   and `--openspec-init` for OpenSpec projects.
-- Verified end-to-end on this machine: OpenCode v2.0.15 model confirmed the
-  injected `<superpowers-bootstrap>` block; omp 18.1.21 returned the probe
-  answer both via `--extension` and via native `.omp/extensions` discovery.
+- Verified end-to-end on Linux: OpenCode v2.0.15 confirmed the injected
+  `<superpowers-bootstrap>` block; omp 18.1.21 returned the probe answer
+  both via `--extension` and via native `.omp/extensions` discovery.
 
 ## Known upstream caveats
 

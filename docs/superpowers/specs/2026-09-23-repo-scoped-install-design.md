@@ -246,7 +246,7 @@ Update `tests/test_hooks.py` (load-by-path pattern stays):
   (fixture tarball via `tarfile` in-memory).
 - `superpowers-bootstrap.py` resolution order (repo copy > env > fallbacks).
 - `.gitignore` block generation idempotency.
-- Global cleanup: managed entries stripped, `other-tool`-style foreign hooks kept.
+- Global cleanup: managed entries stripped, foreign hooks kept byte-for-byte.
 - `install.sh` syntax check stays in the suite doc.
 
 ### Docs

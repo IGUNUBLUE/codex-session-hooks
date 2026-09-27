@@ -124,6 +124,12 @@ back to line mode, which is what most prompt tests want.
 - **Trust model.** Codex approves hook *command definitions*, not file
   contents. Definition changes (e.g., moved paths) require re-trust in
   `/hooks`; content edits do not.
+- **No personal machine data.** This repo is public: tracked files must
+  never contain absolute home paths, local usernames, hostnames, personal
+  names, or inventories of what is installed on a specific machine. Use
+  `~/` or `<placeholder>` paths, phrase version notes as "verified against",
+  and use only the `IGUNUBLUE` GitHub identity (+ noreply email) for git
+  attribution. Check `git diff --cached` for these before every commit.
 
 ## Platform support
 
